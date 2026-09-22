@@ -50,11 +50,12 @@ type runtime struct {
 
 	size size
 
-	mode       string
-	benchView  string
-	reviewFile string
-	notice     string
-	noticeSeq  uint64
+	mode               string
+	benchView          string
+	reviewFile         string
+	selectedReviewFile string
+	notice             string
+	noticeSeq          uint64
 
 	benchSummary string
 	offsets      map[string]int
@@ -362,18 +363,25 @@ func (rt *runtime) handleRequest(req Request) {
 	case "ping", "status":
 		rt.reply(req.Reply, Result{Snapshot: rt.snapshot()})
 	case "view":
-		if req.View == "tree" {
-			rt.benchView = "tree"
-		} else {
-			rt.benchView = "table"
+		switch req.View {
+		case "tree", "table":
+			rt.benchView = req.View
+			if rt.mode == "review" {
+				rt.beginExitReview(req.Reply)
+				return
+			}
+			rt.beginBenchRefresh(req.Reply, true)
+		case "review":
+			rt.selectReview(req.Reply)
+		default:
+			rt.reply(req.Reply, Result{Snapshot: rt.snapshot(), Err: fmt.Errorf("unknown view: %s", req.View)})
 		}
-		if rt.mode == "review" {
-			rt.beginExitReview(req.Reply)
-			return
-		}
-		rt.beginBenchRefresh(req.Reply, true)
 	case "review":
-		rt.beginReview(req.File, req.Reply, rt.mode == "review" && rt.reviewFile != "")
+		if req.File == "" {
+			rt.selectReview(req.Reply)
+		} else {
+			rt.beginReview(req.File, req.Reply, rt.mode == "review")
+		}
 	case "exit-review":
 		if rt.mode == "review" {
 			rt.beginExitReview(req.Reply)
@@ -424,6 +432,9 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 			rt.beginExitReview(nil)
 			return
 		}
+		if key.MatchString("3") {
+			return
+		}
 		if key.MatchString("home") {
 			rt.offsets["review"] = 0
 			rt.draw()
@@ -446,6 +457,10 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 	if key.MatchString("2") {
 		rt.benchView = "tree"
 		rt.beginBenchRefresh(nil, true)
+		return
+	}
+	if key.MatchString("3") {
+		rt.selectReview(nil)
 		return
 	}
 	if key.MatchString("r") {
@@ -549,6 +564,21 @@ func (rt *runtime) beginBenchRefresh(reply chan Result, force bool) {
 	if rt.bench.active == nil {
 		rt.draw()
 	}
+}
+
+func (rt *runtime) selectReview(reply chan Result) {
+	if rt.selectedReviewFile == "" {
+		err := errors.New("no proposal selected; use review --file PATH first")
+		rt.setError(err.Error())
+		rt.draw()
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
+		return
+	}
+	if rt.mode == "review" {
+		rt.reply(reply, Result{Snapshot: rt.snapshot()})
+		return
+	}
+	rt.beginReview(rt.selectedReviewFile, reply, false)
 }
 
 func (rt *runtime) beginReview(file string, reply chan Result, replacing bool) {
@@ -785,11 +815,6 @@ func (rt *runtime) handleSessionStarted(sess *session, summary string) {
 		rt.mode = "review"
 		rt.reviewFile = sess.file
 		rt.draw()
-		if rt.review.pendingReply != nil {
-			reply := rt.review.pendingReply
-			rt.review.pendingReply = nil
-			rt.reply(reply, Result{Snapshot: rt.snapshot()})
-		}
 	}
 }
 
@@ -812,8 +837,14 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 		}
 		if !sess.ready && strings.Contains(sess.promptTail, reviewPrompt) {
 			sess.ready = true
+			rt.selectedReviewFile = sess.file
 			sess.promptTail = ""
 			rt.applyReviewPending(sess)
+			if sess.ready && rt.review.pendingReply != nil {
+				reply := rt.review.pendingReply
+				rt.review.pendingReply = nil
+				rt.reply(reply, Result{Snapshot: rt.snapshot()})
+			}
 		}
 	}
 	rt.draw()
@@ -1061,10 +1092,11 @@ func (rt *runtime) snapshot() Snapshot {
 		ready = rt.bench.active != nil && rt.bench.active.view == rt.benchView
 	}
 	return Snapshot{
-		Mode:       rt.mode,
-		View:       rt.benchView,
-		ReviewFile: rt.reviewFile,
-		Ready:      ready,
+		Mode:               rt.mode,
+		View:               rt.benchView,
+		SelectedReviewFile: rt.selectedReviewFile,
+		ReviewFile:         rt.reviewFile,
+		Ready:              ready,
 	}
 }
 

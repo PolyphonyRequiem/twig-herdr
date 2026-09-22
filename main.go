@@ -19,7 +19,7 @@ Usage:
   twig-herdr open [--pane SOURCE_OR_PANEL_ID]
   twig-herdr table [--pane SOURCE_OR_PANEL_ID]
   twig-herdr tree [--pane SOURCE_OR_PANEL_ID]
-  twig-herdr review --file PATH [--pane SOURCE_OR_PANEL_ID]
+  twig-herdr review [--file PATH] [--pane SOURCE_OR_PANEL_ID]
   twig-herdr exit-review [--pane SOURCE_OR_PANEL_ID]
   twig-herdr status [--pane SOURCE_OR_PANEL_ID]
   twig-herdr panel
@@ -27,11 +27,14 @@ Usage:
 
 Requires Herdr 0.9.0+ and Twig 0.94.0+ on PATH. No Node or Go runtime is needed.
 New benches open in Tree view; explicit Table choices are preserved.
-Inside the panel: 1 Table, 2 Tree, j/k/arrows scroll, PgUp/PgDn/Home/End navigate,
-r refreshes the bench (redraw only during Review), d/b Details/Brief, Esc/c leaves
-Review, q closes the panel. Review never authorizes or applies changes.
+Inside the panel: 1 Table, 2 Tree, 3 Review (after an explicit file selection),
+j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refreshes the bench (redraw
+only during Review), d/b Details/Brief, Esc/c leaves Review, q closes the panel.
+Review never authorizes or applies changes.
 
-Review paths are relative to the source pane's working directory. The control
+Review paths are relative to the source pane's working directory; a selected
+proposal is remembered only until this panel closes. Without a selected file,
+3 reports that no proposal is selected. The control
 channel is local, authenticated, and scoped to the Herdr session and tab.
 Repeated open reuses the existing pane and preserves its divider and view.
 New panels preserve focus, prefer 80-column panes, and use at most 25 rows.
@@ -108,10 +111,7 @@ func run(args []string) error {
 	if command != "open" && command != "table" && command != "tree" && command != "review" && command != "exit-review" && command != "status" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
-	if command == "review" {
-		if *file == "" {
-			return errors.New("review requires --file PATH")
-		}
+	if command == "review" && *file != "" {
 		if !filepath.IsAbs(*file) {
 			*file = filepath.Join(source.Cwd, *file)
 		}

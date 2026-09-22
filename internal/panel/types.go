@@ -16,10 +16,11 @@ type Request struct {
 }
 
 type Snapshot struct {
-	Mode       string `json:"mode"`
-	View       string `json:"view"`
-	ReviewFile string `json:"file,omitempty"`
-	Ready      bool   `json:"ready"`
+	Mode               string `json:"mode"`
+	View               string `json:"view"`
+	ReviewFile         string `json:"file,omitempty"`
+	SelectedReviewFile string `json:"selectedFile,omitempty"`
+	Ready              bool   `json:"ready"`
 }
 
 type Result struct {

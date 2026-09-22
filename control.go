@@ -347,6 +347,9 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 	if command == "status" || command == "exit-review" {
 		return controlResponse{}, errNoPanel
 	}
+	if command == "review" && proposal == "" {
+		return controlResponse{}, errors.New("no proposal selected; use review --file PATH first")
+	}
 	if err := checkTwig(source.Cwd); err != nil {
 		return controlResponse{}, err
 	}
