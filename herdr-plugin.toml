@@ -1,36 +1,76 @@
 id = "twig-herdr"
 name = "Twig bench"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
-description = "Native Twig Table, Tree, and digest-bound Review panes. Requires Node.js 22+ and Twig 0.93.0+ on PATH."
+description = "Native Twig Tree, Table, and digest-bound Review panes. Requires Twig 0.94.0+ on PATH."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["npm", "ci"]
+platforms = ["linux", "macos"]
+command = ["/bin/sh", "scripts/install.sh"]
+
+[[build]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/install.ps1"]
 
 [[actions]]
 id = "open"
+platforms = ["linux", "macos"]
 title = "Open Twig bench"
-command = ["node", "panel.mjs", "open"]
+command = ["./bin/twig-herdr", "open"]
 
+[[actions]]
+id = "open-windows"
+platforms = ["windows"]
+title = "Open Twig bench"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') open''']
 
 [[actions]]
 id = "table"
+platforms = ["linux", "macos"]
 title = "Twig bench: Table view"
-command = ["node", "panel.mjs", "table"]
+command = ["./bin/twig-herdr", "table"]
+
+[[actions]]
+id = "table-windows"
+platforms = ["windows"]
+title = "Twig bench: Table view"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') table''']
 
 [[actions]]
 id = "tree"
+platforms = ["linux", "macos"]
 title = "Twig bench: Tree view"
-command = ["node", "panel.mjs", "tree"]
+command = ["./bin/twig-herdr", "tree"]
+
+[[actions]]
+id = "tree-windows"
+platforms = ["windows"]
+title = "Twig bench: Tree view"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') tree''']
 
 [[actions]]
 id = "exit-review"
+platforms = ["linux", "macos"]
 title = "Exit Twig review"
-command = ["node", "panel.mjs", "exit-review"]
+command = ["./bin/twig-herdr", "exit-review"]
+
+[[actions]]
+id = "exit-review-windows"
+platforms = ["windows"]
+title = "Exit Twig review"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') exit-review''']
 
 [[panes]]
 id = "bench"
+platforms = ["linux", "macos"]
 title = "Twig bench"
 placement = "split"
-command = ["node", "-e", "import(require('node:url').pathToFileURL(require('node:path').join(process.env.HERDR_PLUGIN_ROOT, 'panel.mjs')).href)"]
+command = ["./bin/twig-herdr", "panel"]
+
+[[panes]]
+id = "bench-windows"
+platforms = ["windows"]
+title = "Twig bench"
+placement = "split"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') panel''']

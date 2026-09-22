@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: linux-amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            asset: linux-arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            asset: macos-amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            asset: macos-arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            asset: windows-amd64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify tag matches plugin version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(awk -F'"' '/^version = "/ { print $2; exit }' herdr-plugin.toml)"
+          if [ "$version" != "$manifest_version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match herdr-plugin.toml version $manifest_version" >&2
+            exit 1
+          fi
+      - name: Build ${{ matrix.asset }}
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          asset="twig-herdr-${{ matrix.asset }}${{ matrix.ext }}"
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" -o "dist/${asset}" .
+          (cd dist && sha256sum "$asset" > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          mkdir -p release
+          find artifacts -type f -name 'twig-herdr-*' -exec cp {} release/ \;
+          find artifacts -type f -name SHA256SUMS -exec cat {} + | sort -k2,2 > release/SHA256SUMS
+          echo 'Release assets:'
+          ls -1 release
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" release/* --clobber --repo "$GITHUB_REPOSITORY"
