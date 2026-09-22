@@ -1,0 +1,36 @@
+id = "twig-herdr"
+name = "Twig bench"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Native Twig Table, Tree, and digest-bound Review panes. Requires Node.js 22+ and Twig 0.93.0+ on PATH."
+platforms = ["linux", "macos", "windows"]
+
+[[build]]
+command = ["npm", "ci"]
+
+[[actions]]
+id = "open"
+title = "Open Twig bench"
+command = ["node", "panel.mjs", "open"]
+
+
+[[actions]]
+id = "table"
+title = "Twig bench: Table view"
+command = ["node", "panel.mjs", "table"]
+
+[[actions]]
+id = "tree"
+title = "Twig bench: Tree view"
+command = ["node", "panel.mjs", "tree"]
+
+[[actions]]
+id = "exit-review"
+title = "Exit Twig review"
+command = ["node", "panel.mjs", "exit-review"]
+
+[[panes]]
+id = "bench"
+title = "Twig bench"
+placement = "split"
+command = ["node", "-e", "import(require('node:url').pathToFileURL(require('node:path').join(process.env.HERDR_PLUGIN_ROOT, 'panel.mjs')).href)"]
