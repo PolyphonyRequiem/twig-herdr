@@ -414,7 +414,7 @@ func closePanel(id string) error {
 	if id == "" {
 		return nil
 	}
-	return herdr([]string{"pane", "close", "--pane", id}, nil)
+	return herdr([]string{"pane", "close", id}, nil)
 }
 
 func choosePlacement(rect rectangle) (string, int) {
