@@ -7,8 +7,7 @@ function Strip-Verbatim([string]$Path) {
 }
 
 function Fail([string]$Message) {
-    Write-Error "twig-herdr: $Message"
-    exit 1
+    throw "twig-herdr: $Message"
 }
 
 function Get-Version([string]$Manifest) {
@@ -53,36 +52,41 @@ $BaseUrl = "https://github.com/PolyphonyRequiem/twig-herdr/releases/download/v$V
 $BinDir = Join-Path $PluginRoot 'bin'
 $Dest = Join-Path $BinDir 'twig-herdr.exe'
 
-New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-$TmpDir = Join-Path $BinDir ('.twig-herdr-' + [System.Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
-
-$TmpBin = Join-Path $TmpDir $Asset
-$TmpSums = Join-Path $TmpDir 'SHA256SUMS'
-
-if (-not (Invoke-Download "$BaseUrl/$Asset" $TmpBin)) { Fail "prebuilt binary not available for v$Version ($Asset)" }
-if (-not (Invoke-Download "$BaseUrl/SHA256SUMS" $TmpSums)) { Fail "checksums not available for v$Version" }
-
-$Expected = $null
-Get-Content $TmpSums | ForEach-Object {
-    if (-not $Expected -and $_ -match "^([0-9a-fA-F]{64}) [ *]$([regex]::Escape($Asset))$") {
-        $Expected = $Matches[1].ToLowerInvariant()
-    }
-}
-if (-not $Expected) { Fail "no checksum listed for $Asset" }
-
-$Actual = Get-Sha256 $TmpBin
-if (-not $Actual) { Fail 'no SHA-256 tool (Get-FileHash) available' }
-if ($Actual -ne $Expected) { Fail "checksum mismatch for $Asset (expected $Expected, got $Actual)" }
-
+$TmpDir = $null
 try {
+    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+    $TmpDir = Join-Path $BinDir ('.twig-herdr-' + [System.Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
+
+    $TmpBin = Join-Path $TmpDir $Asset
+    $TmpSums = Join-Path $TmpDir 'SHA256SUMS'
+
+    if (-not (Invoke-Download "$BaseUrl/$Asset" $TmpBin)) { Fail "prebuilt binary not available for v$Version ($Asset)" }
+    if (-not (Invoke-Download "$BaseUrl/SHA256SUMS" $TmpSums)) { Fail "checksums not available for v$Version" }
+
+    $Expected = $null
+    Get-Content $TmpSums | ForEach-Object {
+        if (-not $Expected -and $_ -match "^([0-9a-fA-F]{64}) [ *]$([regex]::Escape($Asset))$") {
+            $Expected = $Matches[1].ToLowerInvariant()
+        }
+    }
+    if (-not $Expected) { Fail "no checksum listed for $Asset" }
+
+    $Actual = Get-Sha256 $TmpBin
+    if (-not $Actual) { Fail 'no SHA-256 tool (Get-FileHash) available' }
+    if ($Actual -ne $Expected) { Fail "checksum mismatch for $Asset (expected $Expected, got $Actual)" }
+
     if (Test-Path -LiteralPath $Dest) {
         [System.IO.File]::Replace($TmpBin, $Dest, $null)
     } else {
         [System.IO.File]::Move($TmpBin, $Dest)
     }
+    Write-Host "twig-herdr: installed v$Version for windows/$Arch and verified SHA-256."
 } catch {
-    Fail "could not atomically install verified binary: $($_.Exception.Message)"
+    Write-Error $_.Exception.Message
+    exit 1
+} finally {
+    if ($TmpDir -and (Test-Path -LiteralPath $TmpDir)) {
+        Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+    }
 }
-Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
-Write-Host "twig-herdr: installed v$Version for windows/$Arch and verified SHA-256."

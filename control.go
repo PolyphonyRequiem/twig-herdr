@@ -390,7 +390,10 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return controlResponse{}, fmt.Errorf("panel %s did not become ready; inspect it with herdr pane read", created)
+	if cleanupErr := closePanel(created); cleanupErr != nil {
+		return controlResponse{}, fmt.Errorf("panel %s did not become ready; cleanup failed: %w", created, cleanupErr)
+	}
+	return controlResponse{}, fmt.Errorf("panel %s did not become ready; it was closed", created)
 }
 
 func layoutFor(id string) (rectangle, error) {
@@ -406,6 +409,12 @@ func layoutFor(id string) (rectangle, error) {
 		}
 	}
 	return rectangle{}, errors.New("pane is absent from its layout")
+}
+func closePanel(id string) error {
+	if id == "" {
+		return nil
+	}
+	return herdr([]string{"pane", "close", "--pane", id}, nil)
 }
 
 func choosePlacement(rect rectangle) (string, int) {
@@ -432,7 +441,7 @@ func launchPanel(source paneInfo, view, review string) (string, error) {
 		entrypoint = "bench-windows"
 	}
 	args := []string{"plugin", "pane", "open", "--plugin", pluginID, "--entrypoint", entrypoint, "--target-pane", source.PaneID, "--direction", direction, "--cwd", source.Cwd, "--no-focus"}
-	for _, pair := range [][2]string{{"TWIG_PANEL_CWD", source.Cwd}, {"TWIG_PANEL_INITIAL_VIEW", view}, {"HERDR_SOCKET_PATH", os.Getenv("HERDR_SOCKET_PATH")}, {"HERDR_WORKSPACE_ID", source.WorkspaceID}, {"HERDR_TAB_ID", source.TabID}} {
+	for _, pair := range [][2]string{{"PATH", os.Getenv("PATH")}, {"TWIG_PANEL_CWD", source.Cwd}, {"TWIG_PANEL_INITIAL_VIEW", view}, {"HERDR_SOCKET_PATH", os.Getenv("HERDR_SOCKET_PATH")}, {"HERDR_WORKSPACE_ID", source.WorkspaceID}, {"HERDR_TAB_ID", source.TabID}} {
 		args = append(args, "--env", pair[0]+"="+pair[1])
 	}
 	if review != "" {
@@ -450,10 +459,16 @@ func launchPanel(source paneInfo, view, review string) (string, error) {
 	if id == "" {
 		return "", errors.New("Herdr returned no new panel identity")
 	}
+	fail := func(err error) (string, error) {
+		if closeErr := closePanel(id); closeErr != nil {
+			return id, errors.Join(err, fmt.Errorf("close failed: %w", closeErr))
+		}
+		return id, err
+	}
 	if direction == "down" {
 		actual, err := layoutFor(id)
 		if err != nil {
-			return id, err
+			return fail(err)
 		}
 		delta := actual.Height - height
 		if delta != 0 {
@@ -464,16 +479,16 @@ func launchPanel(source paneInfo, view, review string) (string, error) {
 			}
 			amount := strconv.FormatFloat(float64(delta)/float64(rect.Height), 'f', 8, 64)
 			if err := herdr([]string{"pane", "resize", "--pane", source.PaneID, "--direction", resize, "--amount", amount}, nil); err != nil {
-				return id, err
+				return fail(err)
 			}
 		}
 	}
 	actual, err := layoutFor(id)
 	if err != nil {
-		return id, err
+		return fail(err)
 	}
 	if actual.Height > 25 {
-		return id, fmt.Errorf("new panel has %d rows, exceeding its 25-row budget", actual.Height)
+		return fail(fmt.Errorf("new panel has %d rows, exceeding its 25-row budget", actual.Height))
 	}
 	if actual.Height < 17 {
 		fmt.Fprintln(os.Stderr, "Small terminal: fewer than ten work-item content rows are available after panel overhead.")

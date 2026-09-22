@@ -69,6 +69,7 @@ type runtime struct {
 
 	review struct {
 		session           *session
+		restoreBench      *session
 		launchCancel      context.CancelFunc
 		launchGen         uint64
 		pendingReply      chan Result
@@ -563,6 +564,7 @@ func (rt *runtime) beginReview(file string, reply chan Result, replacing bool) {
 		return
 	}
 
+	rt.review.restoreBench = rt.bench.active
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("review opened"))
 	rt.cancelBenchPending(errors.New("review opened"))
@@ -605,7 +607,7 @@ func (rt *runtime) beginExitReview(reply chan Result) {
 	rt.review.hasPendingResize = false
 	rt.review.pendingResize = size{}
 	rt.review.hasPendingDensity = false
-	rt.review.pendingDensity = ""
+	rt.review.restoreBench = nil
 	rt.reviewFile = ""
 	rt.mode = "bench"
 	rt.setNotice("Returned to bench view", 1000)
@@ -763,6 +765,7 @@ func (rt *runtime) handleSessionStarted(sess *session, summary string) {
 			return
 		}
 		rt.review.launchCancel = nil
+		rt.review.restoreBench = nil
 		rt.review.session = sess
 		if rt.review.hasPendingResize {
 			sess.pendingResize = rt.review.pendingResize
@@ -852,12 +855,10 @@ func (rt *runtime) handleSessionExit(sess *session, err error) {
 		return
 	}
 	if rt.mode == "review" {
-		if err != nil {
-			rt.setError(fmt.Sprintf("Review exited with code %s", exitReason(err)))
-		} else {
-			rt.setError("Review exited unexpectedly")
+		if err == nil {
+			err = errors.New("Review exited unexpectedly")
 		}
-		rt.draw()
+		rt.restoreBenchAfterReviewFailure(err)
 	}
 }
 
@@ -883,15 +884,30 @@ func (rt *runtime) handleLaunchFailed(kind string, gen uint64, err error) {
 		if gen != rt.review.launchGen {
 			return
 		}
-		rt.review.launchCancel = nil
-		if rt.review.pendingReply != nil {
-			reply := rt.review.pendingReply
-			rt.review.pendingReply = nil
-			rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
-		}
+		rt.restoreBenchAfterReviewFailure(err)
+	}
+}
+
+func (rt *runtime) restoreBenchAfterReviewFailure(err error) {
+	rt.review.launchCancel = nil
+	rt.review.session = nil
+	rt.reviewFile = ""
+	rt.mode = "bench"
+	reply := rt.review.pendingReply
+	rt.review.pendingReply = nil
+	if rt.review.restoreBench != nil {
+		rt.bench.active = rt.review.restoreBench
+		rt.review.restoreBench = nil
 		rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
 		rt.draw()
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
+		return
 	}
+	rt.review.restoreBench = nil
+	rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
+	rt.draw()
+	rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
+	rt.beginBenchRefresh(nil, true)
 }
 
 func (rt *runtime) applyReviewPending(sess *session) {
