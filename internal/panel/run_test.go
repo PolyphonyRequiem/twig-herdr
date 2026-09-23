@@ -21,10 +21,10 @@ func TestLatestProposalNoCandidateLeavesBench(t *testing.T) {
 	rt.size = size{cols: 80, rows: 20}
 	rt.ctx = context.Background()
 	rt.latestProposal = func(context.Context, string) (proposalCandidate, error) {
-		return proposalCandidate{}, errors.New("no unresolved proposal is available")
+		return proposalCandidate{}, errNoUnresolvedProposal
 	}
-	if _, err := resolveLatestProposalResponse([]byte(`{"found":false}`)); err == nil || !strings.Contains(err.Error(), "no unresolved proposal") {
-		t.Fatalf("no-candidate response should be clear, got %v", err)
+	if _, err := resolveLatestProposalResponse([]byte(`{"found":false}`)); !errors.Is(err, errNoUnresolvedProposal) {
+		t.Fatalf("no-candidate response should be distinct from failures, got %v", err)
 	}
 	reply := make(chan Result, 1)
 
@@ -42,6 +42,25 @@ func TestLatestProposalNoCandidateLeavesBench(t *testing.T) {
 	}
 	if rt.mode != "bench" || rt.reviewFile != "" {
 		t.Fatal("missing proposal changed the Bench or opened Review")
+	}
+	if rt.notice != "" {
+		t.Fatalf("no candidate should leave the Bench without a notice, got %q", rt.notice)
+	}
+}
+
+func TestLatestProposalLookupFailureStillReportsError(t *testing.T) {
+	rt := newRuntime(Config{Cwd: t.TempDir()})
+	rt.size = size{cols: 80, rows: 20}
+	rt.review.lookupGen = 1
+	reply := make(chan Result, 1)
+	rt.review.lookupReply = reply
+
+	rt.handleLatestResolved(event{kind: evLatestResolved, token: 1, err: errors.New("selected file changed")})
+	if !strings.Contains(rt.notice, "selected file changed") {
+		t.Fatalf("real lookup failure should remain visible, got %q", rt.notice)
+	}
+	if result := <-reply; result.Err == nil {
+		t.Fatal("real lookup failure was not returned to caller")
 	}
 }
 

@@ -1,6 +1,6 @@
 id = "twig-herdr"
 name = "Twig bench"
-version = "0.2.0"
+version = "0.2.1"
 min_herdr_version = "0.9.0"
 description = "Native Twig Tree, Table, and digest-bound Review panes. Requires Twig 0.94.0+ on PATH."
 platforms = ["linux", "macos", "windows"]
