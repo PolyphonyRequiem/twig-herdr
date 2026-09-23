@@ -606,6 +606,10 @@ func (rt *runtime) handleLatestResolved(ev event) {
 	reply := rt.review.lookupReply
 	rt.review.lookupReply = nil
 	if ev.err != nil {
+		if errors.Is(ev.err, errNoUnresolvedProposal) {
+			rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: ev.err})
+			return
+		}
 		rt.setError(fmt.Sprintf("Review unavailable: %s", safe(ev.err.Error())))
 		rt.draw()
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: ev.err})

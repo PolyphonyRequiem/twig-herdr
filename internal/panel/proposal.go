@@ -22,6 +22,8 @@ type proposalCandidate struct {
 	State string `json:"state"`
 }
 
+var errNoUnresolvedProposal = errors.New("no unresolved proposal is available")
+
 func reviewPreviewArgs(file, digest string) []string {
 	args := []string{"proposal", "preview", "--file", file}
 	if digest != "" {
@@ -53,7 +55,7 @@ func resolveLatestProposalResponse(data []byte) (proposalCandidate, error) {
 		return proposalCandidate{}, err
 	}
 	if !candidate.Found {
-		return proposalCandidate{}, errors.New("no unresolved proposal is available")
+		return proposalCandidate{}, errNoUnresolvedProposal
 	}
 	return validateProposalCandidate(candidate)
 }
@@ -75,7 +77,7 @@ func parseLatestProposal(data []byte) (proposalCandidate, error) {
 
 func validateProposalCandidate(candidate proposalCandidate) (proposalCandidate, error) {
 	if !candidate.Found {
-		return proposalCandidate{}, errors.New("no unresolved proposal is available")
+		return proposalCandidate{}, errNoUnresolvedProposal
 	}
 	if !filepath.IsAbs(candidate.File) {
 		return proposalCandidate{}, errors.New("latest proposal returned a non-absolute file path")
