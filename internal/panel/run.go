@@ -36,7 +36,8 @@ type benchSummary struct {
 }
 
 type runtime struct {
-	cfg Config
+	cfg            Config
+	latestProposal func(context.Context, string) (proposalCandidate, error)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -73,6 +74,9 @@ type runtime struct {
 		launchCancel      context.CancelFunc
 		launchGen         uint64
 		pendingReply      chan Result
+		lookupCancel      context.CancelFunc
+		lookupReply       chan Result
+		lookupGen         uint64
 		pendingResize     size
 		hasPendingResize  bool
 		pendingDensity    string
@@ -123,6 +127,7 @@ const (
 	evSessionData
 	evSessionExit
 	evLaunchFailed
+	evLatestResolved
 	evNoticeExpire
 )
 
@@ -140,6 +145,7 @@ type event struct {
 	data        []byte
 	err         error
 	token       uint64
+	candidate   proposalCandidate
 }
 
 // Run drives the native panel terminal UI.
@@ -170,13 +176,14 @@ func Run(cfg Config, requests <-chan Request) error {
 
 func newRuntime(cfg Config) *runtime {
 	return &runtime{
-		cfg:          cfg,
-		mode:         "bench",
-		benchView:    cfg.InitialView,
-		offsets:      map[string]int{"table": 0, "tree": 0, "review": 0},
-		benchSummary: "loading",
-		done:         make(chan struct{}),
-		events:       make(chan event, 128),
+		cfg:            cfg,
+		latestProposal: latestProposal,
+		mode:           "bench",
+		benchView:      cfg.InitialView,
+		offsets:        map[string]int{"table": 0, "tree": 0, "review": 0},
+		benchSummary:   "loading",
+		done:           make(chan struct{}),
+		events:         make(chan event, 128),
 	}
 }
 
@@ -208,11 +215,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 	go rt.watchBenchTimer()
 	go rt.watchInterrupts()
 
-	if rt.cfg.InitialReview != "" {
-		rt.beginReview(rt.cfg.InitialReview, nil, false)
-	} else {
-		rt.beginBenchRefresh(nil, true)
-	}
+	rt.beginBenchRefresh(nil, true)
 
 	for {
 		select {
@@ -238,6 +241,8 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleSessionExit(ev.session, ev.err)
 			case evLaunchFailed:
 				rt.handleLaunchFailed(ev.sessionKind, ev.token, ev.err)
+			case evLatestResolved:
+				rt.handleLatestResolved(ev)
 			case evNoticeExpire:
 				if rt.noticeSeq == ev.token {
 					rt.notice = ""
@@ -362,23 +367,32 @@ func (rt *runtime) handleRequest(req Request) {
 	case "ping", "status":
 		rt.reply(req.Reply, Result{Snapshot: rt.snapshot()})
 	case "view":
-		if req.View == "tree" {
-			rt.benchView = "tree"
-		} else {
-			rt.benchView = "table"
+		switch req.View {
+		case "tree", "table":
+			rt.benchView = req.View
+			if rt.mode == "review" {
+				rt.beginExitReview(req.Reply)
+				return
+			}
+			rt.cancelReviewLookup(errors.New("Review superseded by Bench view"))
+			rt.beginBenchRefresh(req.Reply, true)
+		case "review":
+			rt.selectReview(req.Reply)
+		default:
+			rt.reply(req.Reply, Result{Snapshot: rt.snapshot(), Err: fmt.Errorf("unknown view: %s", req.View)})
 		}
-		if rt.mode == "review" {
-			rt.beginExitReview(req.Reply)
-			return
-		}
-		rt.beginBenchRefresh(req.Reply, true)
 	case "review":
-		rt.beginReview(req.File, req.Reply, rt.mode == "review" && rt.reviewFile != "")
+		if req.File == "" {
+			rt.selectReview(req.Reply)
+		} else {
+			rt.beginReview(req.File, "", req.Reply, rt.mode == "review")
+		}
 	case "exit-review":
 		if rt.mode == "review" {
 			rt.beginExitReview(req.Reply)
 			return
 		}
+		rt.cancelReviewLookup(errors.New("Review exited"))
 		rt.reply(req.Reply, Result{Snapshot: rt.snapshot()})
 	case "close":
 		rt.reply(req.Reply, Result{Snapshot: rt.snapshot()})
@@ -424,6 +438,9 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 			rt.beginExitReview(nil)
 			return
 		}
+		if key.MatchString("3") {
+			return
+		}
 		if key.MatchString("home") {
 			rt.offsets["review"] = 0
 			rt.draw()
@@ -440,12 +457,18 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 
 	if key.MatchString("1") {
 		rt.benchView = "table"
+		rt.cancelReviewLookup(errors.New("Review superseded by Table view"))
 		rt.beginBenchRefresh(nil, true)
 		return
 	}
 	if key.MatchString("2") {
 		rt.benchView = "tree"
+		rt.cancelReviewLookup(errors.New("Review superseded by Tree view"))
 		rt.beginBenchRefresh(nil, true)
+		return
+	}
+	if key.MatchString("3") {
+		rt.selectReview(nil)
 		return
 	}
 	if key.MatchString("r") {
@@ -551,12 +574,56 @@ func (rt *runtime) beginBenchRefresh(reply chan Result, force bool) {
 	}
 }
 
-func (rt *runtime) beginReview(file string, reply chan Result, replacing bool) {
+func (rt *runtime) selectReview(reply chan Result) {
+	if rt.mode == "review" {
+		rt.reply(reply, Result{Snapshot: rt.snapshot()})
+		return
+	}
+	rt.cancelReviewLookup(errors.New("newer Review selection"))
+	ctx := rt.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	rt.review.lookupCancel = cancel
+	rt.review.lookupReply = reply
+	rt.review.lookupGen++
+	gen := rt.review.lookupGen
+	go func() {
+		candidate, err := rt.latestProposal(lookupCtx, rt.cfg.Cwd)
+		rt.emit(event{kind: evLatestResolved, candidate: candidate, err: err, token: gen})
+	}()
+}
+
+func (rt *runtime) handleLatestResolved(ev event) {
+	if rt.closing || ev.token != rt.review.lookupGen {
+		return
+	}
+	if rt.review.lookupCancel != nil {
+		rt.review.lookupCancel()
+		rt.review.lookupCancel = nil
+	}
+	reply := rt.review.lookupReply
+	rt.review.lookupReply = nil
+	if ev.err != nil {
+		rt.setError(fmt.Sprintf("Review unavailable: %s", safe(ev.err.Error())))
+		rt.draw()
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: ev.err})
+		return
+	}
+	rt.beginReview(ev.candidate.File, ev.candidate.Digest, reply, false)
+}
+
+func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing bool) {
 	if rt.closing {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New("panel is closing")})
 		return
 	}
+	rt.cancelReviewLookup(errors.New("explicit Review superseded latest lookup"))
 	abs, err := rt.resolveFile(file)
+	if err == nil && digest != "" {
+		_, err = validateProposalCandidate(proposalCandidate{Found: true, File: abs, Digest: digest})
+	}
 	if err != nil {
 		rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
 		rt.draw()
@@ -592,7 +659,7 @@ func (rt *runtime) beginReview(file string, reply chan Result, replacing bool) {
 	cols, rows := rt.contentSize()
 	ctx, cancel := context.WithCancel(rt.ctx)
 	rt.review.launchCancel = cancel
-	go rt.launchReview(ctx, cancel, gen, abs, cols, rows)
+	go rt.launchReview(ctx, cancel, gen, abs, digest, cols, rows)
 	rt.draw()
 }
 
@@ -601,6 +668,7 @@ func (rt *runtime) beginExitReview(reply chan Result) {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New("panel is closing")})
 		return
 	}
+	rt.cancelReviewLookup(errors.New("Review exited"))
 	rt.review.launchGen++
 	rt.cancelReviewLaunch(errors.New("returning to bench"))
 	rt.cancelReviewSession(errors.New("returning to bench"))
@@ -632,8 +700,9 @@ func (rt *runtime) launchBench(ctx context.Context, cancel context.CancelFunc, g
 	rt.emit(event{kind: evSessionStarted, session: sess, summary: summary})
 }
 
-func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, gen uint64, file string, cols, rows int) {
-	sess, err := rt.startSession(ctx, cancel, gen, "review", []string{"proposal", "preview", "--file", file, "--interactive"}, file, cols, rows)
+func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, gen uint64, file, digest string, cols, rows int) {
+	args := reviewPreviewArgs(file, digest)
+	sess, err := rt.startSession(ctx, cancel, gen, "review", args, file, cols, rows)
 	if err != nil {
 		cancel()
 		rt.emit(event{kind: evLaunchFailed, sessionKind: "review", token: gen, err: err})
@@ -785,11 +854,6 @@ func (rt *runtime) handleSessionStarted(sess *session, summary string) {
 		rt.mode = "review"
 		rt.reviewFile = sess.file
 		rt.draw()
-		if rt.review.pendingReply != nil {
-			reply := rt.review.pendingReply
-			rt.review.pendingReply = nil
-			rt.reply(reply, Result{Snapshot: rt.snapshot()})
-		}
 	}
 }
 
@@ -814,6 +878,11 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 			sess.ready = true
 			sess.promptTail = ""
 			rt.applyReviewPending(sess)
+			if sess.ready && rt.review.pendingReply != nil {
+				reply := rt.review.pendingReply
+				rt.review.pendingReply = nil
+				rt.reply(reply, Result{Snapshot: rt.snapshot()})
+			}
 		}
 	}
 	rt.draw()
@@ -1132,6 +1201,19 @@ func (rt *runtime) cancelBenchPending(err error) {
 	}
 }
 
+func (rt *runtime) cancelReviewLookup(err error) {
+	if rt.review.lookupCancel != nil {
+		rt.review.lookupCancel()
+		rt.review.lookupCancel = nil
+		rt.review.lookupGen++
+	}
+	if rt.review.lookupReply != nil {
+		reply := rt.review.lookupReply
+		rt.review.lookupReply = nil
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
+	}
+}
+
 func (rt *runtime) cancelReviewLaunch(err error) {
 	if rt.review.launchCancel != nil {
 		rt.review.launchCancel()
@@ -1198,6 +1280,7 @@ func safe(text string) string {
 func (rt *runtime) shutdown() {
 	rt.onceShutdown(func() {
 		rt.closing = true
+		rt.cancelReviewLookup(errors.New("panel closed"))
 		rt.cancelBenchLaunch(nil)
 		rt.cancelBenchPending(nil)
 		rt.cancelReviewLaunch(nil)

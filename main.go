@@ -19,7 +19,7 @@ Usage:
   twig-herdr open [--pane SOURCE_OR_PANEL_ID]
   twig-herdr table [--pane SOURCE_OR_PANEL_ID]
   twig-herdr tree [--pane SOURCE_OR_PANEL_ID]
-  twig-herdr review --file PATH [--pane SOURCE_OR_PANEL_ID]
+  twig-herdr review [--file PATH] [--pane SOURCE_OR_PANEL_ID]
   twig-herdr exit-review [--pane SOURCE_OR_PANEL_ID]
   twig-herdr status [--pane SOURCE_OR_PANEL_ID]
   twig-herdr panel
@@ -27,19 +27,21 @@ Usage:
 
 Requires Herdr 0.9.0+ and Twig 0.94.0+ on PATH. No Node or Go runtime is needed.
 New benches open in Tree view; explicit Table choices are preserved.
-Inside the panel: 1 Table, 2 Tree, j/k/arrows scroll, PgUp/PgDn/Home/End navigate,
-r refreshes the bench (redraw only during Review), d/b Details/Brief, Esc/c leaves
-Review, q closes the panel. Review never authorizes or applies changes.
+Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
+j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refreshes the bench (redraw
+only during Review), d/b Details/Brief, Esc/c leaves Review, q closes the panel.
+Review never authorizes or applies changes.
 
-Review paths are relative to the source pane's working directory. The control
-channel is local, authenticated, and scoped to the Herdr session and tab.
+Relative --file paths resolve from the source pane's working directory; an
+explicit file is a deliberate inspection. View 3 and file-free review resolve
+the latest proposal on each entry without changing the current Review snapshot.
+The control channel is local, authenticated, and scoped to the Herdr session and tab.
 Repeated open reuses the existing pane and preserves its divider and view.
 New panels preserve focus, prefer 80-column panes, and use at most 25 rows.
 
 To build from source: go build -trimpath -o bin/twig-herdr .
 For isolated terminal checks, set TWIG_PANEL_CWD, HERDR_ENV=1, HERDR_PANE_ID,
-HERDR_WORKSPACE_ID, HERDR_TAB_ID and HERDR_SOCKET_PATH. Optional initial state:
-TWIG_PANEL_INITIAL_VIEW=table|tree, TWIG_PANEL_INITIAL_REVIEW_FILE=absolute-path.
+TWIG_PANEL_INITIAL_VIEW=table|tree.
 `
 
 func main() {
@@ -103,15 +105,12 @@ func run(args []string) error {
 			return err
 		}
 		defer stop()
-		return panel.Run(panel.Config{Cwd: source.Cwd, InitialView: view, InitialReview: os.Getenv("TWIG_PANEL_INITIAL_REVIEW_FILE")}, requests)
+		return panel.Run(panel.Config{Cwd: source.Cwd, InitialView: view}, requests)
 	}
 	if command != "open" && command != "table" && command != "tree" && command != "review" && command != "exit-review" && command != "status" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
-	if command == "review" {
-		if *file == "" {
-			return errors.New("review requires --file PATH")
-		}
+	if command == "review" && *file != "" {
 		if !filepath.IsAbs(*file) {
 			*file = filepath.Join(source.Cwd, *file)
 		}

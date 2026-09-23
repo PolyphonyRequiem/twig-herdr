@@ -1,10 +1,9 @@
 package panel
 
-// Config selects a source workspace and its initial presentation. Review is opt-in.
+// Config selects a source workspace and its initial presentation.
 type Config struct {
-	Cwd           string
-	InitialView   string
-	InitialReview string
+	Cwd         string
+	InitialView string
 }
 
 // Request is delivered to the terminal-owning event loop. Commands never apply changes.

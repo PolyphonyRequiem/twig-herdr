@@ -375,7 +375,7 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 	if command == "table" {
 		initialView = "table"
 	}
-	created, err := launchPanel(source, initialView, proposal)
+	created, err := launchPanel(source, initialView)
 	if err != nil {
 		return controlResponse{}, err
 	}
@@ -385,6 +385,9 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 		if err == nil {
 			result, err := requestPanel(record, controlRequest{Command: "status"})
 			if err == nil && result.Ready {
+				if command == "review" {
+					return requestPanel(record, controlRequest{Command: "review", File: proposal})
+				}
 				return result, nil
 			}
 		}
@@ -430,7 +433,7 @@ func choosePlacement(rect rectangle) (string, int) {
 	return "down", height
 }
 
-func launchPanel(source paneInfo, view, review string) (string, error) {
+func launchPanel(source paneInfo, view string) (string, error) {
 	rect, err := layoutFor(source.PaneID)
 	if err != nil {
 		return "", err
@@ -443,9 +446,6 @@ func launchPanel(source paneInfo, view, review string) (string, error) {
 	args := []string{"plugin", "pane", "open", "--plugin", pluginID, "--entrypoint", entrypoint, "--target-pane", source.PaneID, "--direction", direction, "--cwd", source.Cwd, "--no-focus"}
 	for _, pair := range [][2]string{{"PATH", os.Getenv("PATH")}, {"TWIG_PANEL_CWD", source.Cwd}, {"TWIG_PANEL_INITIAL_VIEW", view}, {"HERDR_SOCKET_PATH", os.Getenv("HERDR_SOCKET_PATH")}, {"HERDR_WORKSPACE_ID", source.WorkspaceID}, {"HERDR_TAB_ID", source.TabID}} {
 		args = append(args, "--env", pair[0]+"="+pair[1])
-	}
-	if review != "" {
-		args = append(args, "--env", "TWIG_PANEL_INITIAL_REVIEW_FILE="+review)
 	}
 	var response struct {
 		PluginPane struct {

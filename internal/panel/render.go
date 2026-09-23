@@ -136,9 +136,9 @@ func (rt *runtime) footerText(truncated bool) string {
 		bits = append(bits, rt.notice)
 	}
 	if rt.mode == "review" {
-		bits = append(bits, "Mode: review", "d details · b back · Esc/c exit review · r redraw · 1 table · 2 tree · j/k scroll · PgUp/PgDn/Home/End · q close")
+		bits = append(bits, "Mode: review", "d details · b back · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close")
 	} else {
-		bits = append(bits, "Mode: "+rt.benchView, "1 table · 2 tree · j/k scroll · PgUp/PgDn/Home/End · r refresh · q close")
+		bits = append(bits, "Mode: "+rt.benchView, "1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · r refresh · q close")
 	}
 	return safe(strings.Join(bits, " · "))
 }
