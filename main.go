@@ -11,7 +11,7 @@ import (
 	"github.com/PolyphonyRequiem/twig-herdr/internal/panel"
 )
 
-var version = "0.2.2"
+var version = "0.2.3"
 
 const help = `Twig Herdr — native bench and proposal review panel
 
