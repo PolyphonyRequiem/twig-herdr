@@ -227,6 +227,28 @@ func TestReviewPreviewArgsGuardOnlyLatestSelection(t *testing.T) {
 	}
 }
 
+func TestConsumeReviewEchoDropsSplitInputLine(t *testing.T) {
+	sess := &session{reviewEcho: 'b'}
+	var got []byte
+	for _, chunk := range [][]byte{[]byte("b"), []byte("\r"), []byte("\n\x1b[Hbody")} {
+		got = append(got, consumeReviewEcho(sess, chunk)...)
+	}
+	if string(got) != "\x1b[Hbody" {
+		t.Fatalf("filtered Review output = %q, want child redraw only", got)
+	}
+	if sess.reviewEcho != 0 || len(sess.reviewEchoBuffer) != 0 {
+		t.Fatalf("Review echo state remained after filtering: key=%q buffer=%q", sess.reviewEcho, sess.reviewEchoBuffer)
+	}
+}
+
+func TestConsumeReviewEchoLeavesUnechoedChildOutput(t *testing.T) {
+	sess := &session{reviewEcho: 'd'}
+	input := []byte("\x1b[Hdetails")
+	if got := consumeReviewEcho(sess, input); string(got) != string(input) {
+		t.Fatalf("unechoed child output = %q, want %q", got, input)
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
