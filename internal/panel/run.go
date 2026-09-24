@@ -106,8 +106,10 @@ type session struct {
 	hasData bool
 	exited  bool
 
-	promptTail string
-	density    string
+	promptTail       string
+	density          string
+	reviewEcho       byte
+	reviewEchoBuffer []byte
 
 	pendingDensity    string
 	pendingResize     size
@@ -886,6 +888,12 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 	if sess.term == nil {
 		return
 	}
+	if sess.kind == "review" {
+		data = consumeReviewEcho(sess, data)
+		if len(data) == 0 {
+			return
+		}
+	}
 	sess.hasData = true
 	_, _ = sess.term.Write(data)
 	if sess.kind == "review" {
@@ -1045,8 +1053,48 @@ func (rt *runtime) sendReviewDensity(sess *session, density string) {
 	sess.promptTail = ""
 	sess.term = vt.NewEmulator(sess.cols, sess.rows)
 	sess.term.SetScrollbackSize(scrollbackLimit)
+	sess.reviewEcho = density[0]
+	sess.reviewEchoBuffer = sess.reviewEchoBuffer[:0]
 	_, _ = sess.pty.Write([]byte{density[0], '\r'})
 	rt.draw()
+}
+
+func consumeReviewEcho(sess *session, data []byte) []byte {
+	if sess == nil || sess.reviewEcho == 0 || len(data) == 0 {
+		return data
+	}
+	sess.reviewEchoBuffer = append(sess.reviewEchoBuffer, data...)
+	buffer := sess.reviewEchoBuffer
+	if buffer[0] != sess.reviewEcho {
+		sess.reviewEcho = 0
+		sess.reviewEchoBuffer = nil
+		return buffer
+	}
+	if len(buffer) == 1 {
+		return nil
+	}
+
+	consumed := 1
+	switch buffer[1] {
+	case '\n':
+		consumed = 2
+	case '\r':
+		if len(buffer) == 2 {
+			return nil
+		}
+		consumed = 2
+		if buffer[2] == '\n' {
+			consumed = 3
+		}
+	default:
+		sess.reviewEcho = 0
+		sess.reviewEchoBuffer = nil
+		return buffer
+	}
+
+	sess.reviewEcho = 0
+	sess.reviewEchoBuffer = nil
+	return buffer[consumed:]
 }
 
 func (rt *runtime) sessionMatches(sess *session) bool {
