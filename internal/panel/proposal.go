@@ -24,12 +24,17 @@ type proposalCandidate struct {
 
 var errNoUnresolvedProposal = errors.New("no unresolved proposal is available")
 
-func reviewPreviewArgs(file, digest string) []string {
+func reviewPreviewArgs(file, digest, noColor string) []string {
 	args := []string{"proposal", "preview", "--file", file}
 	if digest != "" {
 		args = append(args, "--expect-digest", digest)
 	}
-	return append(args, "--interactive")
+	color := "always"
+	if noColor != "" {
+		color = "never"
+	}
+	args = append(args, "--color", color, "--interactive")
+	return args
 }
 
 func latestProposal(ctx context.Context, cwd string) (proposalCandidate, error) {

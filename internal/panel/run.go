@@ -102,9 +102,10 @@ type session struct {
 	readDone chan struct{}
 	started  chan struct{}
 
-	ready   bool
-	hasData bool
-	exited  bool
+	ready        bool
+	hasData      bool
+	exited       bool
+	suppressEcho byte
 
 	promptTail string
 	density    string
@@ -705,7 +706,7 @@ func (rt *runtime) launchBench(ctx context.Context, cancel context.CancelFunc, g
 }
 
 func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, gen uint64, file, digest string, cols, rows int) {
-	args := reviewPreviewArgs(file, digest)
+	args := reviewPreviewArgs(file, digest, os.Getenv("NO_COLOR"))
 	sess, err := rt.startSession(ctx, cancel, gen, "review", args, file, cols, rows)
 	if err != nil {
 		cancel()
@@ -872,6 +873,12 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 		return
 	}
 	sess.hasData = true
+	if sess.suppressEcho != 0 {
+		if filtered, ok := suppressReviewEcho(data, sess.suppressEcho); ok {
+			data = filtered
+			sess.suppressEcho = 0
+		}
+	}
 	_, _ = sess.term.Write(data)
 	if sess.kind == "review" {
 		sess.promptTail += string(data)
@@ -879,6 +886,7 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 			sess.promptTail = sess.promptTail[len(sess.promptTail)-512:]
 		}
 		if !sess.ready && strings.Contains(sess.promptTail, reviewPrompt) {
+			sess.suppressEcho = 0
 			sess.ready = true
 			sess.promptTail = ""
 			rt.applyReviewPending(sess)
@@ -1031,7 +1039,22 @@ func (rt *runtime) sendReviewDensity(sess *session, density string) {
 	sess.term = vt.NewEmulator(sess.cols, sess.rows)
 	sess.term.SetScrollbackSize(scrollbackLimit)
 	_, _ = sess.pty.Write([]byte{density[0], '\r'})
+	sess.suppressEcho = density[0]
 	rt.draw()
+}
+
+func suppressReviewEcho(data []byte, density byte) ([]byte, bool) {
+	if len(data) == 0 || data[0] != density {
+		return data, false
+	}
+	data = data[1:]
+	if len(data) > 0 && data[0] == '\r' {
+		data = data[1:]
+	}
+	if len(data) > 0 && data[0] == '\n' {
+		data = data[1:]
+	}
+	return data, true
 }
 
 func (rt *runtime) sessionMatches(sess *session) bool {
