@@ -171,13 +171,24 @@ func TestReviewEntryWhileOpenKeepsCurrentSnapshot(t *testing.T) {
 	}
 }
 
-func TestReviewPreviewArgsGuardOnlyLatestSelection(t *testing.T) {
+func TestReviewPreviewArgsUsesNativeColorWithOptOut(t *testing.T) {
 	file := "/workspace/proposal.json"
 	digest := strings.Repeat("a", 64)
-	if got, want := reviewPreviewArgs(file, digest), []string{"proposal", "preview", "--file", file, "--expect-digest", digest, "--interactive"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("latest preview arguments = %v, want %v", got, want)
+	if got, want := reviewPreviewArgs(file, digest, ""), []string{"proposal", "preview", "--file", file, "--expect-digest", digest, "--color", "always", "--interactive"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("color-enabled preview arguments = %v, want %v", got, want)
 	}
-	if got, want := reviewPreviewArgs(file, ""), []string{"proposal", "preview", "--file", file, "--interactive"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("manual preview arguments = %v, want %v", got, want)
+	if got, want := reviewPreviewArgs(file, "", "1"), []string{"proposal", "preview", "--file", file, "--color", "never", "--interactive"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("NO_COLOR preview arguments = %v, want %v", got, want)
+	}
+}
+
+func TestSuppressReviewEchoOnlyConsumesSelectedInputPrefix(t *testing.T) {
+	filtered, ok := suppressReviewEcho([]byte("d\r\nReview only"), 'd')
+	if !ok || string(filtered) != "Review only" {
+		t.Fatalf("filtered echo = %q, matched = %v", filtered, ok)
+	}
+	unchanged, ok := suppressReviewEcho([]byte("Details"), 'd')
+	if ok || string(unchanged) != "Details" {
+		t.Fatalf("unrelated output changed: %q, matched = %v", unchanged, ok)
 	}
 }
