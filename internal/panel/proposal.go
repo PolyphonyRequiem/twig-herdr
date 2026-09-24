@@ -29,7 +29,7 @@ func reviewPreviewArgs(file, digest string) []string {
 	if digest != "" {
 		args = append(args, "--expect-digest", digest)
 	}
-	return append(args, "--interactive")
+	return append(args, "--color", "always", "--interactive")
 }
 
 func latestProposal(ctx context.Context, cwd string) (proposalCandidate, error) {

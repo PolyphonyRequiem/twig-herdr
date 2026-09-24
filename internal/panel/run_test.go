@@ -219,10 +219,10 @@ func TestReviewEntryWhileOpenKeepsCurrentSnapshot(t *testing.T) {
 func TestReviewPreviewArgsGuardOnlyLatestSelection(t *testing.T) {
 	file := "/workspace/proposal.json"
 	digest := strings.Repeat("a", 64)
-	if got, want := reviewPreviewArgs(file, digest), []string{"proposal", "preview", "--file", file, "--expect-digest", digest, "--interactive"}; !reflect.DeepEqual(got, want) {
+	if got, want := reviewPreviewArgs(file, digest), []string{"proposal", "preview", "--file", file, "--expect-digest", digest, "--color", "always", "--interactive"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("latest preview arguments = %v, want %v", got, want)
 	}
-	if got, want := reviewPreviewArgs(file, ""), []string{"proposal", "preview", "--file", file, "--interactive"}; !reflect.DeepEqual(got, want) {
+	if got, want := reviewPreviewArgs(file, ""), []string{"proposal", "preview", "--file", file, "--color", "always", "--interactive"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("manual preview arguments = %v, want %v", got, want)
 	}
 }
