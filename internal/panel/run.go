@@ -385,7 +385,7 @@ func (rt *runtime) handleRequest(req Request) {
 		if req.File == "" {
 			rt.selectReview(req.Reply)
 		} else {
-			rt.beginReview(req.File, "", req.Reply, rt.mode == "review")
+			rt.beginReview(req.File, "", req.Reply, rt.mode == "review", true)
 		}
 	case "exit-review":
 		if rt.mode == "review" {
@@ -493,15 +493,21 @@ func (rt *runtime) handleScroll(key string, ev uv.KeyPressEvent) {
 	if rt.mode == "review" {
 		offsetKey = "review"
 	}
+	visibleRows := rt.contentVisibleRows()
+	if visibleRows <= 0 {
+		rt.offsets[offsetKey] = 0
+		rt.draw()
+		return
+	}
 	step := 0
 	if ev.MatchString("down", "j") {
 		step = 1
 	} else if ev.MatchString("up", "k") {
 		step = -1
 	} else if ev.MatchString("pgdown") {
-		step = rt.contentRows() - 1
+		step = max(visibleRows-1, 1)
 	} else if ev.MatchString("pgup") {
-		step = -(rt.contentRows() - 1)
+		step = -max(visibleRows-1, 1)
 	}
 	if step == 0 {
 		return
@@ -615,10 +621,9 @@ func (rt *runtime) handleLatestResolved(ev event) {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: ev.err})
 		return
 	}
-	rt.beginReview(ev.candidate.File, ev.candidate.Digest, reply, false)
+	rt.beginReview(ev.candidate.File, ev.candidate.Digest, reply, false, false)
 }
-
-func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing bool) {
+func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing, explicit bool) {
 	if rt.closing {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New("panel is closing")})
 		return
@@ -628,6 +633,13 @@ func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing
 	if err == nil && digest != "" {
 		_, err = validateProposalCandidate(proposalCandidate{Found: true, File: abs, Digest: digest})
 	}
+	if err != nil {
+		rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
+		rt.draw()
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
+		return
+	}
+	launchCwd, err := reviewLaunchCwd(abs, rt.cfg.Cwd, explicit)
 	if err != nil {
 		rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
 		rt.draw()
@@ -663,7 +675,7 @@ func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing
 	cols, rows := rt.contentSize()
 	ctx, cancel := context.WithCancel(rt.ctx)
 	rt.review.launchCancel = cancel
-	go rt.launchReview(ctx, cancel, gen, abs, digest, cols, rows)
+	go rt.launchReview(ctx, cancel, gen, abs, digest, launchCwd, cols, rows)
 	rt.draw()
 }
 
@@ -694,7 +706,7 @@ func (rt *runtime) launchBench(ctx context.Context, cancel context.CancelFunc, g
 		return
 
 	}
-	sess, err := rt.startSession(ctx, cancel, gen, "bench", []string{"workspace", "--view", view}, "", cols, rows)
+	sess, err := rt.startSession(ctx, cancel, gen, "bench", []string{"workspace", "--view", view}, "", rt.cfg.Cwd, cols, rows)
 	if err != nil {
 		cancel()
 		rt.emit(event{kind: evLaunchFailed, sessionKind: "bench", token: gen, err: err})
@@ -704,9 +716,9 @@ func (rt *runtime) launchBench(ctx context.Context, cancel context.CancelFunc, g
 	rt.emit(event{kind: evSessionStarted, session: sess, summary: summary})
 }
 
-func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, gen uint64, file, digest string, cols, rows int) {
+func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, gen uint64, file, digest, cwd string, cols, rows int) {
 	args := reviewPreviewArgs(file, digest)
-	sess, err := rt.startSession(ctx, cancel, gen, "review", args, file, cols, rows)
+	sess, err := rt.startSession(ctx, cancel, gen, "review", args, file, cwd, cols, rows)
 	if err != nil {
 		cancel()
 		rt.emit(event{kind: evLaunchFailed, sessionKind: "review", token: gen, err: err})
@@ -715,7 +727,7 @@ func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, 
 	rt.emit(event{kind: evSessionStarted, session: sess})
 }
 
-func (rt *runtime) startSession(ctx context.Context, cancel context.CancelFunc, gen uint64, kind string, args []string, file string, cols, rows int) (*session, error) {
+func (rt *runtime) startSession(ctx context.Context, cancel context.CancelFunc, gen uint64, kind string, args []string, file, cwd string, cols, rows int) (*session, error) {
 	ptyHandle, err := pty.New()
 	if err != nil {
 		return nil, err
@@ -726,7 +738,10 @@ func (rt *runtime) startSession(ctx context.Context, cancel context.CancelFunc, 
 	}
 
 	cmd := ptyHandle.CommandContext(ctx, "twig", args...)
-	cmd.Dir = rt.cfg.Cwd
+	if cwd == "" {
+		cwd = rt.cfg.Cwd
+	}
+	cmd.Dir = cwd
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "COLORTERM=truecolor")
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -1111,9 +1126,17 @@ func (rt *runtime) panelSize() size {
 }
 
 func (rt *runtime) contentRows() int {
-	rows := rt.size.rows - 2
+	rows := rt.size.rows - 4
 	if rows < 1 {
 		rows = 1
+	}
+	return rows
+}
+
+func (rt *runtime) contentVisibleRows() int {
+	rows := rt.size.rows - 4
+	if rows < 0 {
+		rows = 0
 	}
 	return rows
 }
@@ -1246,13 +1269,13 @@ func (rt *runtime) cancelReviewSession(err error) {
 
 func (rt *runtime) maxOffsetForCurrentSession() int {
 	if rt.mode == "review" {
-		return maxOffset(rt.review.session, rt.contentRows())
+		return maxOffset(rt.review.session, rt.contentVisibleRows())
 	}
-	return maxOffset(rt.bench.active, rt.contentRows())
+	return maxOffset(rt.bench.active, rt.contentVisibleRows())
 }
 
 func maxOffset(sess *session, visibleRows int) int {
-	if sess == nil || sess.term == nil {
+	if sess == nil || sess.term == nil || visibleRows <= 0 {
 		return 0
 	}
 	total := sess.term.Height()

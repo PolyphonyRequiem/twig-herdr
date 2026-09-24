@@ -11,7 +11,7 @@ import (
 	"github.com/PolyphonyRequiem/twig-herdr/internal/panel"
 )
 
-var version = "0.2.1"
+var version = "0.2.2"
 
 const help = `Twig Herdr — native bench and proposal review panel
 
@@ -32,9 +32,9 @@ j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refreshes the bench (redraw
 only during Review), d/b Details/Brief, Esc/c leaves Review, q closes the panel.
 Review never authorizes or applies changes.
 
-Relative --file paths resolve from the source pane's working directory; an
-explicit file is a deliberate inspection. View 3 and file-free review resolve
-the latest proposal on each entry without changing the current Review snapshot.
+Relative --file paths resolve from the source pane's working directory. File-free
+Review keeps using that cwd to find the latest proposal; an explicit absolute
+file launches against that proposal's Twig workspace.
 The control channel is local, authenticated, and scoped to the Herdr session and tab.
 Repeated open reuses the existing pane and preserves its divider and view.
 New panels preserve focus, prefer 80-column panes, and use at most 25 rows.

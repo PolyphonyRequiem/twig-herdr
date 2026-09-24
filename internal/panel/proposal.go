@@ -95,3 +95,32 @@ func validateProposalCandidate(candidate proposalCandidate) (proposalCandidate, 
 	}
 	return candidate, nil
 }
+
+func reviewLaunchCwd(absFile, sourceCwd string, explicit bool) (string, error) {
+	if !explicit {
+		return sourceCwd, nil
+	}
+	return proposalWorkspaceRoot(absFile)
+}
+
+func proposalWorkspaceRoot(file string) (string, error) {
+	canonical, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return "", fmt.Errorf("resolve proposal file %q: %w", file, err)
+	}
+	dir := filepath.Dir(canonical)
+	for {
+		stateDir := filepath.Join(dir, ".twig")
+		stateInfo, stateErr := os.Stat(stateDir)
+		manifest := filepath.Join(dir, "twig.json")
+		manifestInfo, manifestErr := os.Stat(manifest)
+		if (stateErr == nil && stateInfo.IsDir()) || (manifestErr == nil && manifestInfo.Mode().IsRegular()) {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("proposal file %q is not inside a Twig workspace", file)
+		}
+		dir = parent
+	}
+}
