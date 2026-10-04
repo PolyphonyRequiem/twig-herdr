@@ -1,8 +1,8 @@
 id = "twig-herdr"
 name = "Twig bench"
-version = "0.2.4"
+version = "0.3.0"
 min_herdr_version = "0.9.0"
-description = "Native Twig Tree, Table, and digest-bound Review panes. Requires Twig 0.94.0+ on PATH."
+description = "Native Twig Tree/Table and digest-bound read-only Review. Requires Twig qualified-attachment-snapshot-v1: connection host-snapshot JSON, --connection-snapshot on bench/workspace/proposal operations, and digest-guarded interactive proposal preview. Actor changes require explicit reconnect. Upgrade CLI/plugin together; close legacy hosts and verify native quiescence before migration."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -60,6 +60,18 @@ id = "exit-review-windows"
 platforms = ["windows"]
 title = "Exit Twig review"
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') exit-review''']
+
+[[actions]]
+id = "reconnect"
+platforms = ["linux", "macos"]
+title = "Twig bench: Acknowledge and reconnect"
+command = ["./bin/twig-herdr", "reconnect"]
+
+[[actions]]
+id = "reconnect-windows"
+platforms = ["windows"]
+title = "Twig bench: Acknowledge and reconnect"
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", '''$p=$env:HERDR_PLUGIN_ROOT; if(-not $p){throw "HERDR_PLUGIN_ROOT is unset"}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; & (Join-Path $p 'scripts\launch.ps1') reconnect''']
 
 [[panes]]
 id = "bench"

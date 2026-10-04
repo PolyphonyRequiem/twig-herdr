@@ -11,7 +11,7 @@ import (
 	"github.com/PolyphonyRequiem/twig-herdr/internal/panel"
 )
 
-var version = "0.2.4"
+var version = "0.3.0"
 
 const help = `Twig Herdr — native bench and proposal review panel
 
@@ -22,15 +22,21 @@ Usage:
   twig-herdr review [--file PATH] [--pane SOURCE_OR_PANEL_ID]
   twig-herdr exit-review [--pane SOURCE_OR_PANEL_ID]
   twig-herdr status [--pane SOURCE_OR_PANEL_ID]
+  twig-herdr reconnect [--pane SOURCE_OR_PANEL_ID]
   twig-herdr panel
   twig-herdr --version
 
-Requires Herdr 0.9.0+ and Twig 0.94.0+ on PATH. No Node or Go runtime is needed.
+Requires Herdr 0.9.0+ and Twig qualified-attachment-snapshot-v1 protocol on PATH:
+connection host-snapshot -o json and --connection-snapshot on bench/workspace/proposal
+operations, plus digest-guarded interactive proposal preview. Upgrade CLI/plugin together;
+close legacy hosts and verify native quiescence before migration/admission.
 New benches open in Tree view; explicit Table choices are preserved.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refreshes the bench (redraw
 only during Review), d/b Details/Brief, Esc/c leaves Review, q closes the panel.
-Review never authorizes or applies changes.
+Ctrl+R explicitly acknowledges reconnect and launches a fresh admitted CLI runtime.
+Effective binding/principal changes clear previous actor data and disable refresh/view/review.
+Review never authorizes or applies changes; original native digest/origin remain intact.
 
 Relative --file paths resolve from the source pane's working directory. File-free
 Review keeps using that cwd to find the latest proposal; an explicit absolute
@@ -107,7 +113,7 @@ func run(args []string) error {
 		defer stop()
 		return panel.Run(panel.Config{Cwd: source.Cwd, InitialView: view}, requests)
 	}
-	if command != "open" && command != "table" && command != "tree" && command != "review" && command != "exit-review" && command != "status" {
+	if command != "open" && command != "table" && command != "tree" && command != "review" && command != "exit-review" && command != "status" && command != "reconnect" {
 		return fmt.Errorf("unknown command %q (use --help)", command)
 	}
 	if command == "review" && *file != "" {
@@ -118,6 +124,11 @@ func run(args []string) error {
 	}
 	result, err := controlPanel(source, command, *file)
 	if err != nil {
+		if result.ReconnectRequired {
+			if encodeErr := json.NewEncoder(os.Stdout).Encode(result); encodeErr != nil {
+				return errors.Join(err, encodeErr)
+			}
+		}
 		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(result)

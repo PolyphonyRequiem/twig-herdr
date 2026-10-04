@@ -15,10 +15,14 @@ type Request struct {
 }
 
 type Snapshot struct {
-	Mode       string `json:"mode"`
-	View       string `json:"view"`
-	ReviewFile string `json:"file,omitempty"`
-	Ready      bool   `json:"ready"`
+	Mode              string `json:"mode"`
+	View              string `json:"view"`
+	ReviewFile        string `json:"file,omitempty"`
+	Ready             bool   `json:"ready"`
+	BindingID         string `json:"bindingId,omitempty"`
+	IdentityID        string `json:"identityId,omitempty"`
+	ReconnectRequired bool   `json:"reconnectRequired"`
+	Error             string `json:"reconnectError,omitempty"`
 }
 
 type Result struct {

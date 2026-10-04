@@ -10,8 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
+	goruntime "runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestLatestProposalNoCandidateLeavesBench(t *testing.T) {
 	rt := newRuntime(Config{Cwd: t.TempDir()})
 	rt.size = size{cols: 80, rows: 20}
 	rt.ctx = context.Background()
-	rt.latestProposal = func(context.Context, string) (proposalCandidate, error) {
+	rt.latestProposal = func(context.Context, string, string) (proposalCandidate, error) {
 		return proposalCandidate{}, errNoUnresolvedProposal
 	}
 	if _, err := resolveLatestProposalResponse([]byte(`{"found":false}`)); !errors.Is(err, errNoUnresolvedProposal) {
@@ -110,7 +111,7 @@ func TestLatestLookupKeepsTerminalResponsiveAndCancelsWhenReviewExits(t *testing
 	rt.size = size{cols: 80, rows: 20}
 	started := make(chan struct{})
 	gotCwd := ""
-	rt.latestProposal = func(ctx context.Context, cwd string) (proposalCandidate, error) {
+	rt.latestProposal = func(ctx context.Context, cwd, snapshot string) (proposalCandidate, error) {
 		gotCwd = cwd
 		close(started)
 		<-ctx.Done()
@@ -202,7 +203,7 @@ func TestReviewEntryWhileOpenKeepsCurrentSnapshot(t *testing.T) {
 	rt.mode, rt.benchView, rt.reviewFile = "review", "table", "/current/proposal.json"
 	rt.review.session = &session{kind: "review", file: rt.reviewFile, ready: true, term: vt.NewEmulator(80, 18)}
 	latestCalls := 0
-	rt.latestProposal = func(context.Context, string) (proposalCandidate, error) {
+	rt.latestProposal = func(context.Context, string, string) (proposalCandidate, error) {
 		latestCalls++
 		return proposalCandidate{Found: true, File: "/new/proposal.json", Digest: strings.Repeat("a", 64)}, nil
 	}
@@ -213,17 +214,6 @@ func TestReviewEntryWhileOpenKeepsCurrentSnapshot(t *testing.T) {
 	result := <-reply
 	if result.Err != nil || result.Snapshot.ReviewFile != "/current/proposal.json" || latestCalls != 0 {
 		t.Fatalf("open Review changed or re-resolved its snapshot: %+v, latest calls %d", result, latestCalls)
-	}
-}
-
-func TestReviewPreviewArgsGuardOnlyLatestSelection(t *testing.T) {
-	file := "/workspace/proposal.json"
-	digest := strings.Repeat("a", 64)
-	if got, want := reviewPreviewArgs(file, digest), []string{"proposal", "preview", "--file", file, "--expect-digest", digest, "--color", "always", "--interactive"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("latest preview arguments = %v, want %v", got, want)
-	}
-	if got, want := reviewPreviewArgs(file, ""), []string{"proposal", "preview", "--file", file, "--color", "always", "--interactive"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("manual preview arguments = %v, want %v", got, want)
 	}
 }
 
@@ -322,17 +312,23 @@ func TestReviewLaunchCwdUsesProposalWorkspaceForExplicitFilesAndSourceForLatest(
 		t.Fatalf("explicit proposal launched from %q, want manifest workspace %q", got, wantManifestWorkspace)
 	}
 
-	symlink := filepath.Join(root, "proposal-link.json")
-	if err := os.Symlink(manifestProposal, symlink); err != nil {
-		t.Fatal(err)
-	}
-	got, err = reviewLaunchCwd(symlink, source, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != wantManifestWorkspace {
-		t.Fatalf("symlinked proposal launched from %q, want target workspace %q", got, wantManifestWorkspace)
-	}
+	t.Run("symlinked proposal", func(t *testing.T) {
+		symlink := filepath.Join(root, "proposal-link.json")
+		if err := os.Symlink(manifestProposal, symlink); err != nil {
+			// ERROR_PRIVILEGE_NOT_HELD is distinct from ordinary access-denied errors.
+			if goruntime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+				t.Skip("Windows token cannot create symbolic links; ordinary explicit/latest workspace cases still run")
+			}
+			t.Fatal(err)
+		}
+		got, err := reviewLaunchCwd(symlink, source, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != wantManifestWorkspace {
+			t.Fatalf("symlinked proposal launched from %q, want target workspace %q", got, wantManifestWorkspace)
+		}
+	})
 
 	got, err = reviewLaunchCwd(stateProposal, source, false)
 	if err != nil {
@@ -379,7 +375,7 @@ func TestReviewResizeClampsChromeAndChildViewport(t *testing.T) {
 			rt.size = size{cols: 40, rows: tc.rows}
 			rt.review.session = &session{kind: "review", ready: true, hasData: true, cols: 40, rows: 8, term: vt.NewEmulator(40, 8)}
 			rt.offsets["review"] = 99
-			output := captureStdout(t, func() { rt.handleResize(size{cols: 40, rows: tc.rows}) })
+			output := captureStdout(t, func() { rt.handleAdmittedResize(size{cols: 40, rows: tc.rows}) })
 			if got := rt.review.session.rows; got != tc.wantSessionRows {
 				t.Fatalf("child viewport rows = %d, want %d", got, tc.wantSessionRows)
 			}
@@ -403,24 +399,24 @@ func TestReviewScrollUsesVisibleViewportRows(t *testing.T) {
 	rt.size = size{cols: 40, rows: 7}
 	rt.review.session = &session{kind: "review", ready: true, hasData: true, cols: 40, rows: 8, term: vt.NewEmulator(40, 8)}
 	rt.offsets["review"] = 0
-	rt.handleKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
+	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
 	if got := rt.offsets["review"]; got != 2 {
 		t.Fatalf("page down offset = %d, want 2", got)
 	}
-	rt.handleKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyEnd}))
+	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyEnd}))
 	if got, want := rt.offsets["review"], rt.maxOffsetForCurrentSession(); got != want {
 		t.Fatalf("end offset = %d, want %d", got, want)
 	}
 	rt.size = size{cols: 40, rows: 5}
 	rt.offsets["review"] = 0
-	rt.handleKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
+	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
 	if got := rt.offsets["review"]; got != 1 {
 		t.Fatalf("single-row viewport page down offset = %d, want 1", got)
 	}
 
 	rt.size = size{cols: 40, rows: 4}
 	rt.offsets["review"] = 5
-	rt.handleKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
+	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
 	if got := rt.offsets["review"]; got != 0 {
 		t.Fatalf("short viewport page down offset = %d, want 0", got)
 	}

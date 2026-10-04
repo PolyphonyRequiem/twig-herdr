@@ -44,6 +44,11 @@ func (rt *runtime) draw() {
 	if rt.closing {
 		return
 	}
+	if len(rt.admissionActions) != 0 {
+		// A queued first action cannot expose another old frame while its native
+		// origin check is outstanding. Refusal clears this queue before redraw.
+		return
+	}
 	if rt.size.cols <= 0 || rt.size.rows <= 0 {
 		rt.size = rt.panelSize()
 	}
@@ -67,6 +72,10 @@ func (rt *runtime) draw() {
 	} else {
 		sess = rt.bench.active
 	}
+	if rt.reconnectRequired {
+		sess = nil
+		placeholder = "Prior binding data unavailable. Ctrl+R explicitly reconnects."
+	}
 
 	offset := rt.offsets[key]
 	if offset < 0 {
@@ -81,6 +90,10 @@ func (rt *runtime) draw() {
 	var out strings.Builder
 	out.Grow(cols * rows)
 	out.WriteString("\x1b[0m\x1b[H\x1b[2J")
+	if rt.reconnectRequired {
+		// Also clear the containing terminal's retained scrollback, not just VT nodes.
+		out.WriteString("\x1b[3J")
+	}
 	out.WriteString("\x1b[1;1H\x1b[2K")
 	drawBar(&out, rt.headerText(), cols, "\x1b[48;2;22;40;59m\x1b[38;2;177;217;239m")
 
@@ -155,12 +168,15 @@ func (rt *runtime) headerText() string {
 	if rt.mode == "review" {
 		view = "Review (snapshot)"
 	}
+	if rt.reconnectRequired {
+		view = "Stopped — reconnect required"
+	}
 	subject := rt.cfg.Cwd
 	if rt.reviewFile != "" {
 		subject = filepath.Base(rt.reviewFile)
 	}
-	return fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Bench: \x1b[1m%s\x1b[22m · \x1b[2m%s\x1b[22m",
-		safe(view), safe(bench), safe(subject))
+	return fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Identity: %s (cached) · Bench: \x1b[1m%s\x1b[22m · Binding: %s · \x1b[2m%s\x1b[22m",
+		safe(view), safe(rt.binding.IdentityID), safe(bench), safe(rt.binding.BindingID), safe(subject))
 }
 
 func (rt *runtime) footerText(truncated bool) string {
@@ -176,6 +192,10 @@ func (rt *runtime) footerText(truncated bool) string {
 	if rt.mode == "review" {
 		mode = "review"
 		help = "d details · b back · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close"
+	}
+	if rt.reconnectRequired {
+		mode = "reconnect-required"
+		help = "Ctrl+R acknowledge/reconnect · q close; refresh/view/review disabled"
 	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
 	return strings.Join(bits, "  ·  ")

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -32,18 +31,9 @@ func reviewPreviewArgs(file, digest string) []string {
 	return append(args, "--color", "always", "--interactive")
 }
 
-func latestProposal(ctx context.Context, cwd string) (proposalCandidate, error) {
-	cmd := exec.CommandContext(ctx, "twig", "proposal", "latest", "-o", "json")
-	cmd.Dir = cwd
-	output, err := cmd.Output()
+func latestProposal(ctx context.Context, cwd, snapshot string) (proposalCandidate, error) {
+	output, err := twigOutput(ctx, cwd, boundArgs([]string{"proposal", "latest", "-o", "json"}, snapshot)...)
 	if err != nil {
-		var detail string
-		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) != 0 {
-			detail = strings.TrimSpace(string(exitErr.Stderr))
-		}
-		if detail != "" {
-			return proposalCandidate{}, fmt.Errorf("resolve latest proposal: %s", detail)
-		}
 		return proposalCandidate{}, fmt.Errorf("resolve latest proposal: %w", err)
 	}
 	return resolveLatestProposalResponse(output)

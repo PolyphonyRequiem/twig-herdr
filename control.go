@@ -119,26 +119,8 @@ func resolvePane(id string) (paneInfo, error) {
 func checkTwig(cwd string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "twig", "--version")
-	cmd.Dir = cwd
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("Twig 0.94.0+ is required on PATH: %w", err)
-	}
-	fields := strings.Fields(string(output))
-	if len(fields) == 0 {
-		return errors.New("Twig returned no version")
-	}
-	parts := strings.Split(strings.TrimPrefix(fields[len(fields)-1], "v"), ".")
-	if len(parts) < 3 {
-		return fmt.Errorf("unrecognized Twig version %q", string(output))
-	}
-	major, errMajor := strconv.Atoi(parts[0])
-	minor, errMinor := strconv.Atoi(parts[1])
-	if errMajor != nil || errMinor != nil || major < 0 || (major == 0 && minor < 94) {
-		return fmt.Errorf("Twig 0.94.0+ required; found %s. Run twig upgrade", strings.TrimSpace(string(output)))
-	}
-	return nil
+	_, err := panel.ReadHostBinding(ctx, cwd, "")
+	return err
 }
 
 type registration struct {
@@ -283,7 +265,7 @@ func servePanel(source paneInfo, requests chan<- panel.Request) (func(), error) 
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		if input.Command != "status" && input.Command != "view" && input.Command != "review" && input.Command != "exit-review" && input.Command != "close" {
+		if input.Command != "status" && input.Command != "view" && input.Command != "review" && input.Command != "exit-review" && input.Command != "close" && input.Command != "reconnect" {
 			http.Error(w, "invalid command", http.StatusBadRequest)
 			return
 		}
@@ -344,16 +326,19 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 	} else if !errors.Is(err, errNoPanel) {
 		return controlResponse{}, err
 	}
-	if command == "status" || command == "exit-review" {
+	if command == "status" || command == "exit-review" || command == "reconnect" {
 		return controlResponse{}, errNoPanel
 	}
-	if err := checkTwig(source.Cwd); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	binding, err := panel.ReadHostBinding(ctx, source.Cwd, "")
+	if err != nil {
 		return controlResponse{}, err
 	}
 	var bench struct {
 		Current string `json:"current"`
 	}
-	if err := executeJSON("twig", source.Cwd, []string{"bench", "list", "-o", "json"}, &bench); err != nil {
+	if err := executeJSON("twig", source.Cwd, []string{"bench", "list", "-o", "json", "--connection-snapshot", binding.Snapshot}, &bench); err != nil {
 		return controlResponse{}, fmt.Errorf("source workspace is not ready: %w", err)
 	}
 	if bench.Current == "" {
@@ -384,6 +369,10 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 		record, err := readRegistration(file)
 		if err == nil {
 			result, err := requestPanel(record, controlRequest{Command: "status"})
+				if result.ReconnectRequired {
+				result.Error = result.Snapshot.Error
+				return result, errors.New(result.Error)
+				}
 			if err == nil && result.Ready {
 				if command == "review" {
 					return requestPanel(record, controlRequest{Command: "review", File: proposal})
@@ -446,6 +435,10 @@ func launchPanel(source paneInfo, view string) (string, error) {
 	args := []string{"plugin", "pane", "open", "--plugin", pluginID, "--entrypoint", entrypoint, "--target-pane", source.PaneID, "--direction", direction, "--cwd", source.Cwd, "--no-focus"}
 	for _, pair := range [][2]string{{"PATH", os.Getenv("PATH")}, {"TWIG_PANEL_CWD", source.Cwd}, {"TWIG_PANEL_INITIAL_VIEW", view}, {"HERDR_SOCKET_PATH", os.Getenv("HERDR_SOCKET_PATH")}, {"HERDR_WORKSPACE_ID", source.WorkspaceID}, {"HERDR_TAB_ID", source.TabID}} {
 		args = append(args, "--env", pair[0]+"="+pair[1])
+	}
+	if home := os.Getenv("TWIG_USER_HOME"); home != "" {
+		// Preserve the caller's registry/store location, never an account selector.
+		args = append(args, "--env", "TWIG_USER_HOME="+home)
 	}
 	var response struct {
 		PluginPane struct {
