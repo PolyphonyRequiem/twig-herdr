@@ -267,6 +267,14 @@ func TestNarrowViewerKeepsBothPinMouseTargets(t *testing.T) {
 	}
 }
 
+func TestSeedHidesPinControls(t *testing.T) {
+	rt, snapshot := browserFixture(t)
+	snapshot.Roots[0].IsSeed = true
+	if rt.pinButton("single") != "" || rt.pinButton("tree") != "" {
+		t.Fatal("seed exposes disabled pin hints")
+	}
+}
+
 func TestInheritedOnlyGesturesAddOwnPinAndSeedsRefuse(t *testing.T) {
 	for _, mode := range []string{"single", "tree"} {
 		rt, _ := browserFixture(t)

@@ -183,6 +183,9 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 	}
 	plain := ansi.Strip(rt.footerText(truncated))
 	for _, button := range buttons {
+		if button.text == "" {
+			continue
+		}
 		index := strings.Index(plain, button.text)
 		if index < 0 {
 			continue
@@ -275,7 +278,7 @@ func (rt *runtime) pinButton(mode string) string {
 	verb := "Pin"
 	if node := rt.selectedPinNode(); node != nil {
 		if node.IsSeed || node.ID <= 0 {
-			verb = "Disabled"
+			return ""
 		} else if explicitPin(rt.browser.snapshot, node.ID, mode) {
 			verb = "Unpin"
 		}
@@ -291,8 +294,6 @@ func (rt *runtime) pinButton(mode string) string {
 		state := "+"
 		if verb == "Unpin" {
 			state = "-"
-		} else if verb == "Disabled" {
-			state = "x"
 		}
 		return fmt.Sprintf("[%s %s%s]", key, state, label)
 	}
