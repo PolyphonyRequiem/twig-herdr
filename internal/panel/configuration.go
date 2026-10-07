@@ -83,11 +83,12 @@ func (rt *runtime) matchesCapture(benchID string, binding HostBinding, digest st
 }
 
 type configurationView struct {
-	benchID   string
-	section   int
-	selected  [4]int
-	offset    int
-	maxOffset int
+	benchID         string
+	section         int
+	sectionsFocused bool
+	selected        [4]int
+	offset          int
+	maxOffset       int
 }
 
 // One editor handles IDs, area paths and iteration expressions. Cursor offsets
@@ -227,7 +228,7 @@ func (rt *runtime) openConfiguration() {
 	rt.cancelQueuedViews()
 	rt.cancelReviewLookup(errors.New("Review superseded by Bench configuration"))
 	rt.form, rt.showBrowserHelp = nil, false
-	rt.configuration = &configurationView{benchID: snapshot.BenchID}
+	rt.configuration = &configurationView{benchID: snapshot.BenchID, sectionsFocused: true}
 	rt.draw()
 }
 
@@ -295,6 +296,7 @@ func (rt *runtime) chooseSection(section int) {
 	if rt.configuration.section == 3 {
 		rt.beginManagementRefresh()
 	}
+	rt.revealConfigurationSelection()
 	rt.draw()
 }
 
@@ -349,17 +351,48 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 	if c == nil {
 		return
 	}
+	if key.MatchString("left") {
+		c.sectionsFocused = true
+		c.offset = 0
+		rt.revealConfigurationSelection()
+		rt.draw()
+		return
+	}
+	if key.MatchString("right") || c.sectionsFocused && key.MatchString("enter") {
+		c.sectionsFocused = false
+		rt.revealConfigurationSelection()
+		rt.draw()
+		return
+	}
+	if c.sectionsFocused && key.MatchString("up", "k", "down", "j", "home", "end") {
+		section := c.section
+		switch {
+		case key.MatchString("up", "k"):
+			section--
+		case key.MatchString("down", "j"):
+			section++
+		case key.MatchString("home"):
+			section = 0
+		case key.MatchString("end"):
+			section = 3
+		}
+		rt.chooseSection(max(0, min(section, 3)))
+		return
+	}
 	switch {
 	case key.MatchString("esc", "b"):
 		rt.leaveConfiguration()
 		rt.draw()
 	case key.MatchString("q"):
 		rt.shutdown()
-	case key.MatchString("tab", "right"):
+	case key.MatchString("tab"):
+		c.sectionsFocused = true
 		rt.chooseSection(c.section + 1)
-	case key.MatchString("shift+tab", "left"):
+	case key.MatchString("shift+tab"):
+		c.sectionsFocused = true
 		rt.chooseSection(c.section + 3)
 	case key.MatchString("1", "2", "3", "4"):
+		c.sectionsFocused = false
 		section := 0
 		if key.MatchString("2") {
 			section = 1
@@ -630,7 +663,10 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 	for i, label := range []string{"[1 Pins]", "[2 Areas]", "[3 Sprints]", "[4 Benches]"} {
 		prefix := "  "
 		if i == view.section {
-			prefix = "› "
+			prefix = "• "
+			if view.sectionsFocused {
+				prefix = "› "
+			}
 		}
 		logical = append(logical, configurationLine{text: prefix + label, action: "section", row: i})
 	}
@@ -674,7 +710,10 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 		}
 		prefix := "  "
 		if i == view.selected[view.section] {
-			prefix = "› "
+			prefix = "• "
+			if !view.sectionsFocused {
+				prefix = "› "
+			}
 		}
 		logical = append(logical, configurationLine{text: prefix + label, action: "entry", row: i})
 	}
@@ -743,8 +782,12 @@ func (rt *runtime) revealConfigurationSelection() {
 	view := rt.configuration
 	lines := rt.configurationLines(rt.contentCols())
 	start, end := -1, -1
+	action, selected := "entry", view.selected[view.section]
+	if view.sectionsFocused {
+		action, selected = "section", view.section
+	}
 	for i, line := range lines {
-		if line.action == "entry" && line.row == view.selected[view.section] {
+		if line.action == action && line.row == selected {
 			if start < 0 {
 				start = i
 			}
@@ -767,6 +810,38 @@ func (rt *runtime) drawConfiguration(out *strings.Builder, cols, visible int) {
 	rt.drawConfigurationLines(out, cols, visible, lines, c.offset)
 }
 
+func (rt *runtime) configurationLineStyle(line configurationLine) string {
+	base := "\x1b[48;2;24;28;42m"
+	if rt.form == nil && rt.configuration != nil {
+		view := rt.configuration
+		selected, focused := false, false
+		if line.action == "section" {
+			selected, focused = line.row == view.section, view.sectionsFocused
+		} else if line.action == "entry" {
+			selected, focused = line.row == view.selected[view.section], !view.sectionsFocused
+		}
+		if selected && focused {
+			return "\x1b[1;48;2;70;49;91m\x1b[38;2;255;246;255m"
+		}
+		if selected {
+			return base + "\x1b[1;38;2;125;211;235m"
+		}
+	}
+	if line.action == "remove" || rt.form != nil && rt.form.remove && line.action == "confirm" || strings.HasPrefix(line.text, "Refused:") {
+		return base + "\x1b[1;38;2;255;151;151m"
+	}
+	if line.action == "add" || line.action == "bench-select" || line.action == "confirm" {
+		return base + "\x1b[1;38;2;148;225;171m"
+	}
+	if line.action == "field" {
+		return "\x1b[48;2;35;47;67m\x1b[38;2;245;247;255m"
+	}
+	if line.action != "" {
+		return base + "\x1b[38;2;201;177;239m"
+	}
+	return base + "\x1b[38;2;177;184;202m"
+}
+
 func (rt *runtime) drawConfigurationLines(out *strings.Builder, cols, visible int, lines []configurationLine, offset int) {
 	for y := range visible {
 		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+3)
@@ -774,11 +849,7 @@ func (rt *runtime) drawConfigurationLines(out *strings.Builder, cols, visible in
 			continue
 		}
 		line := lines[offset+y]
-		if line.action != "" {
-			out.WriteString("\x1b[1m")
-		}
-		out.WriteString(ansi.Truncate(line.text, cols, ""))
-		out.WriteString("\x1b[0m")
+		drawBar(out, line.text, cols, rt.configurationLineStyle(line))
 		if line.fieldCursors != nil {
 			// Use the renderer's wrapped text and its display-width convention,
 			// not a separate mouse-side wrapping calculation. Both cells of a
@@ -947,8 +1018,10 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 		} else if rt.configuration != nil {
 			switch hit.action {
 			case "config-section":
+				rt.configuration.sectionsFocused = false
 				rt.chooseSection(hit.row)
 			case "config-entry":
+				rt.configuration.sectionsFocused = false
 				rt.configuration.selected[rt.configuration.section] = hit.row
 				rt.draw()
 			case "config-bench-select":

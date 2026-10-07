@@ -32,7 +32,8 @@ Keys:
   j/k or up/down select work items locally (not twig set), PgUp/PgDn/Home/End navigate
   left/right collapse/expand, Space toggle; click rows/disclosures; wheel scrolls
   b Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer
-  Tab or 1/2/3/4 sections; Areas/Sprints use a add, d remove; Enter reviews/confirms
+  up/down sections; Enter/right items; left sections; Tab or 1/2/3/4 sections
+  Areas/Sprints use a add, d remove; Enter reviews/confirms
   Benches: arrows/j/k choose, Enter selects, n creates empty, d/Delete reviews deletion
   Yes/Cancel shows exact saved pins/queries; Default is protected; staged work survives
   Current deletion selects default. Stale contents require a fresh list/reconfirmation.

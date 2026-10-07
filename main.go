@@ -41,7 +41,8 @@ Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k or up/down select local work items (not twig set), left/right collapse/expand,
 Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
 b opens Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer.
-Tab or 1/2/3/4 chooses a section. Pins uses p/Shift+P independent toggles, including
+Up/down chooses sections; Enter/right focuses items; left returns to sections.
+Tab or 1/2/3/4 also chooses a section. Pins uses p/Shift+P independent toggles, including
 uncached rows; Areas/Sprints use a add and d remove with review, never p/P pins.
 Benches: arrows/j/k choose, Enter selects, n creates an empty named Bench, d/Delete
 reviews exact saved pins/queries before Yes/Cancel. Default is protected. Deletion

@@ -31,6 +31,7 @@ type HostBinding struct {
 	Organization    string `json:"organization"`
 	Project         string `json:"project"`
 	Team            string `json:"team"`
+	EffectiveTeam   string `json:"effectiveTeam"`
 }
 
 func ReadHostBinding(ctx context.Context, cwd, expected string) (HostBinding, error) {

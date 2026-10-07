@@ -314,9 +314,6 @@ func TestConnectionHeaderKeepsNativeContextWithoutAuthorityIDs(t *testing.T) {
 		t.Fatal("header leaked internal identity/cache qualification")
 	}
 	rt.binding.Team = ""
-	if strings.Contains(rt.headerText(), "Team:") {
-		t.Fatal("header invented an absent team")
-	}
 	rt.size.cols = 32
 	narrow := ansi.Truncate(ansi.Strip(rt.headerText()), 32, "…")
 	if !strings.Contains(narrow, "Bench:") || strings.Contains(narrow, rt.cfg.Cwd) {
@@ -328,5 +325,23 @@ func TestConnectionHeaderKeepsNativeContextWithoutAuthorityIDs(t *testing.T) {
 		if strings.Contains(strings.Split(ansi.Strip(rt.headerText()), " · ")[0], "/") {
 			t.Fatal("missing connection metadata produced an invented org/project")
 		}
+	}
+}
+
+func TestHeaderShowsNativeEffectiveTeamWhenRawTeamIsEmpty(t *testing.T) {
+	rt := managementFixture(t)
+	binding, err := parseStandaloneBinding([]byte(`{"bindingId":"binding","identityId":"identity","worktreeRoot":"/work","organization":"Org","project":"Project","team":"","effectiveTeam":"Project Team"}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.binding = binding
+	rt.size.cols = 160
+	if !strings.Contains(ansi.Strip(rt.headerText()), "Team: Project Team") {
+		t.Fatal("header hides the native default team")
+	}
+	rt.binding.EffectiveTeam = ""
+	rt.browser.snapshot.EffectiveTeam = "Project Team"
+	if !strings.Contains(ansi.Strip(rt.headerText()), "Team: Project Team") {
+		t.Fatal("older standalone status concealed the guarded browser's effective team")
 	}
 }

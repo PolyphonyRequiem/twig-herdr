@@ -28,6 +28,7 @@ type BrowserSnapshot struct {
 	BindingID     string              `json:"bindingId"`
 	IdentityID    string              `json:"identityId"`
 	WorktreeRoot  string              `json:"worktreeRoot"`
+	EffectiveTeam string              `json:"effectiveTeam"`
 	Configuration *BenchConfiguration `json:"configuration"`
 	Roots         []*BrowserNode      `json:"roots"`
 }

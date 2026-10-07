@@ -212,6 +212,9 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 }
 
 func (rt *runtime) headerText() string {
+	if rt.reconnectRequired {
+		return "\x1b[1;38;2;255;151;151mStopped — reconnect required\x1b[0m"
+	}
 	bench := rt.benchSummary
 	if bench == "" {
 		bench = "loading"
@@ -225,9 +228,6 @@ func (rt *runtime) headerText() string {
 	}
 	if rt.mode == "review" {
 		view = "Review (snapshot)"
-	}
-	if rt.reconnectRequired {
-		view = "Stopped — reconnect required"
 	}
 	subject := rt.cfg.Cwd
 	if rt.reviewFile != "" {
@@ -253,13 +253,21 @@ func (rt *runtime) headerText() string {
 	// Reserve room for both connection and current Bench before optional context,
 	// account, view and cwd. Never expose storage/attachment IDs as labels.
 	width := max(rt.size.cols, 1)
-	labelWidth := max((width-24)/2, 1)
+	labelWidth := max((width-36)/3, 1)
 	connection = ansi.Truncate(connection, labelWidth, "…")
 	bench = ansi.Truncate(safe(bench), labelWidth, "…")
-	header := fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Bench: \x1b[1m%s\x1b[22m · User: %s", connection, bench, safe(account))
-	if team := strings.TrimSpace(rt.binding.Team); team != "" {
-		header += " · Team: " + safe(team)
+	team := strings.TrimSpace(rt.binding.Team)
+	if team == "" {
+		team = strings.TrimSpace(rt.binding.EffectiveTeam)
 	}
+	if team == "" && rt.browser.snapshot != nil {
+		team = strings.TrimSpace(rt.browser.snapshot.EffectiveTeam)
+	}
+	if team == "" {
+		team = "not configured"
+	}
+	team = ansi.Truncate(safe(team), labelWidth, "…")
+	header := fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Team: %s · Bench: \x1b[1m%s\x1b[22m · User: %s", connection, team, bench, safe(account))
 	return header + " · " + safe(view) + " · \x1b[2m" + safe(subject) + "\x1b[22m"
 }
 
@@ -301,20 +309,24 @@ func (rt *runtime) footerText(truncated bool) string {
 		return "[Close] · PgUp/PgDn/wheel scroll · other key returns"
 	}
 	if rt.configuration != nil {
+		navigation := "Items: ↑/↓ · ← sections"
+		if rt.configuration.sectionsFocused {
+			navigation = "Sections: ↑/↓ · Enter/→ items"
+		}
 		if rt.configuration.section == 3 {
 			buttons := "[n Create] [Enter Select]"
 			if target := rt.selectedManagedBench(); target != nil && !target.IsDefault {
 				buttons += " [d Delete]"
 			}
-			return buttons + " [Esc Back] · Tab/1/2/3/4 sections · j/k select · r refresh"
+			return navigation + " · " + buttons + " [Esc Back] · Tab/1/2/3/4 sections · r refresh"
 		}
 		if rt.configuration.section == 0 {
-			return rt.pinButton("single") + " " + rt.pinButton("tree") + " [i ID] [Esc Back] · CONFIGURATION · Tab sections · s sync · r refresh"
+			return navigation + " · " + rt.pinButton("single") + " " + rt.pinButton("tree") + " [i ID] [Esc Back] · s sync · r refresh"
 		}
 		if rt.size.cols < 55 {
-			return "[a] [d] [Esc] · CONFIGURATION · Tab sections · s sync"
+			return navigation + " · [a] [d] [Esc]"
 		}
-		return "[a Add] [d Remove] [Esc Back] · CONFIGURATION · Tab/1/2/3/4 sections · j/k select · s sync · r refresh · q close"
+		return navigation + " · [a Add] [d Remove] [Esc Back] · Tab/1/2/3/4 sections · s sync · r refresh"
 	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
 	if rt.mode == "bench" && !rt.reconnectRequired && !rt.showBrowserHelp {

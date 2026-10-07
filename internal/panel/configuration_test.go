@@ -36,6 +36,36 @@ func TestConfigurationEscapeRestoresViewerStateAndDoesNotBecomeReview(t *testing
 	}
 }
 
+func TestConfigurationArrowsNavigateSectionsThenItems(t *testing.T) {
+	rt, snapshot := browserFixture(t)
+	snapshot.Configuration.Areas = []BenchArea{{Path: "Project\\First"}, {Path: "Project\\Second"}}
+	captureStdout(t, func() {
+		rt.openConfiguration()
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyDown})
+	})
+	if rt.configuration.section != 1 {
+		t.Fatal("Down must move from Pins to Areas in the section menu")
+	}
+	captureStdout(t, func() {
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyRight})
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyDown})
+	})
+	if rt.configuration.section != 1 || rt.configuration.selected[1] != 1 || rt.form != nil {
+		t.Fatal("Right must focus items without mutation; Down must select the next item")
+	}
+	rt.configuration.offset = 5
+	captureStdout(t, func() {
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyLeft})
+		if rt.configuration.offset != 0 {
+			t.Fatal("Left focused an offscreen section menu")
+		}
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyUp})
+	})
+	if rt.configuration.section != 0 {
+		t.Fatal("Left must return to sections and Up must choose Pins")
+	}
+}
+
 func TestEmptyBenchManualPinRequiresNumericIDAndExplicitConfirmation(t *testing.T) {
 	rt, snapshot := browserFixture(t)
 	isolatePinCommands(t, rt)
