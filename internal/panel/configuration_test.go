@@ -38,24 +38,37 @@ func TestConfigurationEscapeRestoresViewerStateAndDoesNotBecomeReview(t *testing
 
 func TestEmptyBenchManualPinRequiresNumericIDAndExplicitConfirmation(t *testing.T) {
 	rt, snapshot := browserFixture(t)
+	isolatePinCommands(t, rt)
 	snapshot.Roots = []*BrowserNode{}
 	rt.browser.replace(snapshot)
 	captureStdout(t, func() {
 		rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"})
-		if rt.form == nil || rt.form.kind != "pin" {
-			t.Fatal("an empty Bench cannot enter a manual pin")
+		rt.handleKey(uv.KeyPressEvent{Code: 'P', Text: "P"})
+		rt.handleKey(uv.KeyPressEvent{Code: 'i', Text: "i"})
+		if rt.form != nil || rt.pinCancel != nil || rt.notice == "" {
+			t.Fatal("empty viewer opened manual ID entry or attempted a mutation")
 		}
-		for _, letter := range "qcsp" {
+		for _, hit := range rt.hits {
+			if strings.Contains(hit.action, "manual-id") {
+				t.Fatal("viewer exposes a manual-ID mouse action")
+			}
+		}
+		rt.handleKey(uv.KeyPressEvent{Code: 'b', Text: "b"})
+		rt.handleKey(uv.KeyPressEvent{Code: 'i', Text: "i"})
+		if rt.form == nil || rt.form.kind != "pin" || rt.configuration == nil {
+			t.Fatal("configuration Pins cannot enter a manual ID for an empty Bench")
+		}
+		for _, letter := range "qcspP" {
 			rt.handleKey(uv.KeyPressEvent{Code: letter, Text: string(letter)})
 		}
-		if rt.form.editor.text != "qcsp" || rt.closing || rt.syncCancel != nil || rt.pinCancel != nil {
+		if rt.form.editor.text != "qcspP" || rt.closing || rt.syncCancel != nil || rt.pinCancel != nil {
 			t.Fatal("text field executed a viewer shortcut")
 		}
 		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
 		if rt.form.confirm || rt.form.error == "" || rt.pinCancel != nil {
 			t.Fatal("nonnumeric work item ID reached confirmation or a mutation")
 		}
-		for range 4 {
+		for range 5 {
 			rt.handleKey(uv.KeyPressEvent{Code: uv.KeyBackspace})
 		}
 		rt.handleKey(uv.KeyPressEvent{Code: '9', Text: "9001"})
@@ -191,18 +204,111 @@ func TestEscapeCancelsFieldBeforeLeavingConfigurationAndQueuedKeysCannotApply(t 
 	}
 }
 
-func TestUncachedPinCanBeRemovedWithoutDisplayedWorkItem(t *testing.T) {
-	rt, snapshot := browserFixture(t)
-	snapshot.Roots = []*BrowserNode{}
-	snapshot.Configuration.Pins = []BenchPin{{ID: 991, Mode: "single"}, {ID: 991, Mode: "tree"}}
-	rt.browser.replace(snapshot)
-	captureStdout(t, func() { rt.openConfiguration(); rt.removeConfigurationSelection() })
-	if rt.picker == nil || rt.picker.node.ID != 991 || len(rt.picker.node.Pins) != 2 || rt.picker.explanation != "" || rt.picker.settingsDigest != snapshot.Configuration.SettingsDigest {
-		t.Fatal("uncached pin could not capture both explicit modes for guarded removal")
+func TestUncachedConfigurationPinGesturesAffectOnlyChosenKind(t *testing.T) {
+	for _, mode := range []string{"single", "tree"} {
+		for _, mouse := range []bool{false, true} {
+			rt, snapshot := browserFixture(t)
+			isolatePinCommands(t, rt)
+			rt.size = size{cols: 100, rows: 30}
+			snapshot.Roots = []*BrowserNode{}
+			snapshot.Configuration.Pins = []BenchPin{{ID: 991, Mode: "single"}, {ID: 991, Mode: "tree"}, {ID: 992, Mode: "single"}}
+			rt.browser.replace(snapshot)
+			captureStdout(t, func() {
+				rt.openConfiguration()
+				if mouse {
+					clicked := false
+					for _, hit := range rt.hits {
+						if hit.action == "config-pin-"+mode {
+							rt.handleMouse(uv.Mouse{X: hit.x1, Y: hit.y, Button: uv.MouseLeft})
+							clicked = true
+							break
+						}
+					}
+					if !clicked {
+						t.Fatal("configuration named pin action is not clickable")
+					}
+				} else if mode == "tree" {
+					rt.handleKey(uv.KeyPressEvent{Code: 'P', Text: "P"})
+				} else {
+					rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"})
+				}
+			})
+			if rt.pinAction == nil || strings.Join(rt.pinAction.args()[:5], " ") != "workspace untrack 991 --mode "+mode {
+				t.Fatal("uncached pin gesture removed both kinds or targeted the viewer selection")
+			}
+			if len(snapshot.Configuration.Pins) != 3 || rt.configuration == nil {
+				t.Fatal("pin action speculatively replaced native truth or exited configuration")
+			}
+		}
 	}
-	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEscape}) })
-	if rt.picker != nil || rt.configuration == nil || rt.pinCancel != nil {
-		t.Fatal("canceling uncached removal did not return to configuration")
+}
+
+func TestConfigurationNonItemSectionsDoNotPinOrEnterManualIDs(t *testing.T) {
+	for _, section := range []int{1, 2} {
+		rt, snapshot := browserFixture(t)
+		snapshot.Configuration.Areas = []BenchArea{{Path: "Project\\Area"}}
+		snapshot.Configuration.Sprints = []BenchSprint{{Expression: "@Current"}}
+		captureStdout(t, func() {
+			rt.openConfiguration()
+			rt.chooseSection(section)
+			for _, key := range []rune{'p', 'P', 'i'} {
+				rt.handleKey(uv.KeyPressEvent{Code: key, Text: string(key)})
+			}
+		})
+		if rt.pinCancel != nil || rt.form != nil || rt.configuration.section != section {
+			t.Fatal("area/sprint row was treated as a work item or opened manual-ID entry")
+		}
+		for _, hit := range rt.hits {
+			if strings.Contains(hit.action, "pin-") || strings.Contains(hit.action, "manual-id") {
+				t.Fatal("area/sprint section exposes pin controls")
+			}
+		}
+	}
+}
+
+func TestManualIDReviewKeysAndMouseChooseAddIntentEvenIfAlreadyPinned(t *testing.T) {
+	for _, tree := range []bool{false, true} {
+		for _, mouse := range []bool{false, true} {
+			rt, _ := browserFixture(t)
+			isolatePinCommands(t, rt)
+			rt.size = size{cols: 100, rows: 30}
+			captureStdout(t, func() {
+				rt.openConfiguration()
+				rt.openInput("pin", "1")
+				rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+				if rt.pinCancel != nil || rt.form == nil || !rt.form.confirm {
+					t.Fatal("ID validation skipped explicit kind review")
+				}
+				if mouse {
+					action := "config-pin-single"
+					if tree {
+						action = "config-pin-tree"
+					}
+					clicked := false
+					for _, hit := range rt.hits {
+						if hit.action == action {
+							rt.handleMouse(uv.Mouse{X: hit.x1, Y: hit.y, Button: uv.MouseLeft})
+							clicked = true
+							break
+						}
+					}
+					if !clicked {
+						t.Fatal("manual review has no named choose-and-add mouse action")
+					}
+				} else if tree {
+					rt.handleKey(uv.KeyPressEvent{Code: 'P', Text: "P"})
+				} else {
+					rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"})
+				}
+			})
+			want := "workspace track 1"
+			if tree {
+				want = "workspace track-tree 1"
+			}
+			if rt.form != nil || rt.pinAction == nil || strings.Join(rt.pinAction.args()[:3], " ") != want {
+				t.Fatal("manual choose-and-confirm did not add only the named pin kind")
+			}
+		}
 	}
 }
 
@@ -273,6 +379,9 @@ func TestConfigurationFieldClicksUseWrappedGraphemeGeometry(t *testing.T) {
 			rt.size = size{cols: click.cols, rows: click.rows}
 			snapshot.BenchName = "Wrapped 界 Bench"
 			captureStdout(t, func() {
+				if click.kind == "pin" {
+					rt.openConfiguration()
+				}
 				rt.openInput(click.kind, click.value)
 				if click.cursor >= 0 {
 					rt.form.editor.cursor = click.cursor
@@ -304,7 +413,7 @@ func TestConfigurationFieldClicksUseWrappedGraphemeGeometry(t *testing.T) {
 					rt.handleKey(uv.KeyPressEvent{Code: letter, Text: string(letter)})
 				}
 				want := click.value[:click.want] + "qcbs" + click.value[click.want:]
-				if captured.editor.text != want || rt.closing || rt.configuration != nil || rt.syncCancel != nil || rt.pinCancel != nil {
+				if captured.editor.text != want || rt.closing || (click.kind != "pin" && rt.configuration != nil) || rt.syncCancel != nil || rt.pinCancel != nil {
 					t.Fatal("click-to-edit ran viewer shortcuts or inserted at the wrong grapheme")
 				}
 				if captured.benchID != benchID || captured.binding != binding || captured.settingsDigest != digest {

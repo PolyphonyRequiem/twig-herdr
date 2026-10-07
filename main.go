@@ -33,18 +33,23 @@ Companion operations hold native connection admission and expected-origin guards
 status fingerprints detect host changes but are not atomic native snapshot tokens.
 Without the bundle, normal Twig must provide qualified-attachment-snapshot-v1
 host admission plus --include-browser, --expect-bench, --expect-binding,
---expect-identity and --expect-settings, plus configuration v1 in browser JSON.
+--expect-identity and --expect-settings, configuration v1 in browser JSON, and
+workspace untrack ID --mode single|tree for independent pin removal.
 No ANSI identity scraping or auth fallback is used.
 New benches open in Tree view; explicit Table choices are preserved.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k or up/down select local work items (not twig set), left/right collapse/expand,
 Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
 b opens Bench Configuration (Pins / Areas / Sprints); Esc returns to the same viewer.
-Tab or 1/2/3 chooses a section; a adds, d removes; Enter reviews then confirms.
-p opens Single item / Whole subtree for the selected item; i enters any positive ID,
-including in an empty Bench. Unknown IDs stay uncached/unverified, never guessed or
-automatically fetched. Shift+P confirms explicit unpin; inherited membership and
-seeds explain instead of mutating. Click footer controls; ? opens discovery help.
+Tab or 1/2/3 chooses a section. Pins uses p/Shift+P independent toggles, including
+uncached rows; Areas/Sprints use a add and d remove with review, never p/P pins.
+p toggles only the selected item's explicit Single pin; Shift+P only Subtree pin.
+Both can coexist; removing one retains the other and inherited/query membership.
+Manual IDs are only in b Bench Configuration > Pins > i, including an empty Bench.
+Enter validates the ID and reviews; p adds Single pin, Shift+P adds Subtree pin.
+Enter adds the chosen kind. Unknown IDs stay uncached/unverified until scoped sync.
+Seeds explain instead of mutating. Click each named pin control for its key action;
+footer Pin/Unpin labels reflect each explicit kind. ? opens discovery help.
 Areas distinguish Exact/Under; sprints accept @Current, @Current±N or absolute paths.
 No sprints disables automatic membership; areas alone never enable a project-wide rule.
 Text fields treat q/c/s/p as text. Esc cancels input first; Ctrl+C always quits.

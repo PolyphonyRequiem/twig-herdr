@@ -12,19 +12,19 @@ import (
 
 func TestBenchSelectionRespondsWhileConnectionCheckIsPending(t *testing.T) {
 	for _, standalone := range []bool{false, true} {
-		rt := newRuntime(Config{Cwd: t.TempDir(), InitialView: "tree", Standalone: standalone})
+		rt, _ := browserFixture(t)
+		rt.cfg.Standalone = standalone
+		isolatePinCommands(t, rt)
 		rt.size = size{cols: 80, rows: 8}
-		rt.ctx = context.Background()
 		rt.admissionCancel = func() {}
 		rt.admissionActions = []event{{kind: evBenchTick}}
-		rt.browser.replace(&BrowserSnapshot{BenchID: "bench", Roots: []*BrowserNode{{Key: "1", ID: 1, Label: "FIRST ROW"}, {Key: "2", ID: 2, Label: "SECOND ROW"}}})
 		captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'j', Text: "j"}) })
 		if rt.browser.selectedID != 2 {
 			t.Fatal("local selection waited for connection admission")
 		}
 		captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"}) })
-		if rt.picker == nil || rt.picker.node.ID != 2 {
-			t.Fatal("local pin picker waited for connection admission")
+		if rt.pinAction == nil || rt.pinAction.id != 2 || rt.pinAction.remove {
+			t.Fatal("local pin intent waited for connection admission or targeted inherited membership")
 		}
 	}
 }

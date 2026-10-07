@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -147,53 +148,208 @@ func TestRefreshPreservesSelectionAndFoldByWorkItemIdentity(t *testing.T) {
 	}
 }
 
-func TestPinPickerExplainsInheritedAndSeedTargetsAndCapturesExplicitPins(t *testing.T) {
-	rt, _ := browserFixture(t)
-	rt.browser.ensureLayout("tree", 32)
-	rt.browser.selectIndex(1)
-	captureStdout(t, func() { rt.openPicker(true) })
-	if rt.picker == nil || !strings.Contains(rt.picker.explanation, "#1") {
-		t.Fatal("inherited unpin did not explain its authoritative subtree source")
-	}
-	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter}) })
-	if rt.picker != nil || rt.pinCancel != nil {
-		t.Fatal("inherited-only Enter attempted a mutation")
-	}
-	rt.browser.selectIndex(3)
-	captureStdout(t, func() { rt.openPicker(false) })
-	if rt.picker == nil || !strings.Contains(rt.picker.explanation, "Publish") {
-		t.Fatal("seed picker did not explain why pinning is disabled")
-	}
-	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEscape}) })
-	rt.browser.selectIndex(0)
-	output := captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'P', Text: "P"}) })
-	if rt.picker == nil || !rt.picker.remove || !strings.Contains(ansi.Strip(output), "single + tree") {
-		t.Fatal("Shift+P did not enumerate both explicit pin kinds for confirmation")
-	}
-	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEscape}) })
-	if rt.pinCancel != nil {
-		t.Fatal("canceling explicit unpin launched a mutation")
+// Canceled contexts keep interaction tests isolated from both the installed Twig
+// and the user's Bench; they inspect the native command intent before admission.
+func isolatePinCommands(t *testing.T, rt *runtime) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt.ctx = ctx
+	t.Cleanup(rt.cancelPins)
+}
+
+func TestIndependentPinGesturesChooseGuardedIntentForEveryExplicitState(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		for _, modes := range [][]string{nil, {"single"}, {"tree"}, {"single", "tree"}} {
+			for _, mode := range []string{"single", "tree"} {
+				for _, mouse := range []bool{false, true} {
+					name := strings.Join(modes, "+") + "/" + mode
+					if standalone {
+						name += "/standalone"
+					}
+					if mouse {
+						name += "/mouse"
+					}
+					t.Run(name, func(t *testing.T) {
+						rt, snapshot := browserFixture(t)
+						rt.cfg.Standalone = standalone
+						isolatePinCommands(t, rt)
+						rt.size = size{cols: 100, rows: 16}
+						snapshot.Configuration.Pins = nil
+						remove := false
+						for _, explicit := range modes {
+							snapshot.Configuration.Pins = append(snapshot.Configuration.Pins, BenchPin{ID: 1, Mode: explicit})
+							remove = remove || explicit == mode
+						}
+						if snapshot.Configuration.Pins == nil {
+							snapshot.Configuration.Pins = []BenchPin{}
+						}
+						captureStdout(t, func() {
+							rt.draw()
+							if mouse {
+								clicked := false
+								for _, hit := range rt.hits {
+									if hit.action == "pin-"+mode {
+										rt.handleMouse(uv.Mouse{X: hit.x1, Y: hit.y, Button: uv.MouseLeft})
+										clicked = true
+										break
+									}
+								}
+								if !clicked {
+									t.Fatal("named pin action is not clickable")
+								}
+							} else if mode == "tree" {
+								rt.handleKey(uv.KeyPressEvent{Code: 'P', Text: "P"})
+							} else {
+								rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"})
+							}
+						})
+						if rt.pinAction == nil {
+							t.Fatal("pin gesture did not capture an immediate native intent")
+						}
+						command := "track"
+						if mode == "tree" {
+							command = "track-tree"
+						}
+						want := []string{"workspace", command, "1"}
+						if remove {
+							want = []string{"workspace", "untrack", "1", "--mode", mode}
+						}
+						want = append(want, "--expect-bench", "bench", "--expect-settings", "settings", "-o", "json", "--expect-binding", "binding", "--expect-identity", "identity")
+						if got := rt.pinAction.args(); !reflect.DeepEqual(got, want) {
+							t.Fatalf("pin gesture changed the wrong selector or dropped refusal guards: %v", got)
+						}
+						gen, pending := rt.pinGen, rt.pinAction
+						captureStdout(t, func() {
+							rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"})
+							rt.handleKey(uv.KeyPressEvent{Code: 'P', Text: "P"})
+						})
+						if rt.pinGen != gen || rt.pinAction != pending {
+							t.Fatal("busy repeat launched another or opposite-kind mutation")
+						}
+						// A same-kind external change must not turn this intention into a flip.
+						snapshot.Configuration.Pins = []BenchPin{{ID: 1, Mode: mode}}
+						if got := pending.args(); !reflect.DeepEqual(got, want) {
+							t.Fatal("an external change retargeted the captured add/remove intention")
+						}
+					})
+				}
+			}
+		}
 	}
 }
 
-func TestPickerCannotRetargetAfterBenchChangeAndLatePinReplyCannotReviveIt(t *testing.T) {
-	rt, snapshot := browserFixture(t)
-	rt.bench.launchGen = 1
-	captureStdout(t, func() { rt.openPicker(false) })
-	changed := *snapshot
-	changed.BenchID = "other-bench"
-	captureStdout(t, func() { rt.handleBrowserLoaded(event{token: 1, browser: &changed}) })
-	if rt.picker != nil {
-		t.Fatal("an open pin picker silently retargeted to a changed Bench")
+func TestHelpDismissalCannotMutateHiddenPinTarget(t *testing.T) {
+	for _, code := range []rune{'p', 'P'} {
+		rt, _ := browserFixture(t)
+		isolatePinCommands(t, rt)
+		rt.showBrowserHelp = true
+		captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: code, Text: string(code)}) })
+		if rt.showBrowserHelp || rt.pinAction != nil {
+			t.Fatal("help dismissal mutated a hidden target or failed to return")
+		}
 	}
+}
+
+func TestNarrowViewerKeepsBothPinMouseTargets(t *testing.T) {
+	rt, snapshot := browserFixture(t)
+	rt.size = size{cols: 30, rows: 16}
+	snapshot.Configuration.Pins = []BenchPin{{ID: 1, Mode: "single"}, {ID: 1, Mode: "tree"}}
+	captureStdout(t, func() { rt.draw() })
+	for _, action := range []string{"pin-single", "pin-tree"} {
+		found := false
+		for _, hit := range rt.hits {
+			found = found || hit.action == action
+		}
+		if !found {
+			t.Fatalf("narrow viewer lost mouse control %s", action)
+		}
+	}
+}
+
+func TestInheritedOnlyGesturesAddOwnPinAndSeedsRefuse(t *testing.T) {
+	for _, mode := range []string{"single", "tree"} {
+		rt, _ := browserFixture(t)
+		isolatePinCommands(t, rt)
+		rt.browser.ensureLayout("tree", 32)
+		rt.browser.selectIndex(1)
+		captureStdout(t, func() { rt.toggleSelectedPin(mode) })
+		if rt.pinAction == nil || rt.pinAction.id != 2 || rt.pinAction.remove || rt.pinAction.mode != mode {
+			t.Fatal("inherited-only action targeted an ancestor or removed inherited membership")
+		}
+		rt.cancelPins()
+		rt.browser.selectIndex(3)
+		captureStdout(t, func() { rt.toggleSelectedPin(mode) })
+		if rt.pinCancel != nil || !strings.Contains(rt.notice, "Publish") {
+			t.Fatal("seed pin action did not refuse with a publish explanation")
+		}
+	}
+}
+
+func TestCapturedPinIntentRefusesChangedBenchOriginOrSettings(t *testing.T) {
+	for _, change := range []string{"bench", "settings", "identity", "binding", "worktree", "snapshot"} {
+		t.Run(change, func(t *testing.T) {
+			rt, snapshot := browserFixture(t)
+			action := pinAction{id: 1, mode: "single", remove: true, benchID: snapshot.BenchID, binding: rt.binding, settingsDigest: configurationDigest(snapshot)}
+			switch change {
+			case "bench":
+				snapshot.BenchID = "other-bench"
+			case "settings":
+				snapshot.Configuration.SettingsDigest = "other-settings"
+			case "identity":
+				rt.binding.IdentityID = "other-identity"
+			case "binding":
+				rt.binding.BindingID = "other-binding"
+			case "worktree":
+				rt.binding.WorktreeRoot = t.TempDir()
+			case "snapshot":
+				rt.binding.Snapshot = "other-snapshot"
+			}
+			captureStdout(t, func() { rt.beginPinMutation(action) })
+			if rt.pinCancel != nil || rt.pinAction != nil || rt.notice == "" {
+				t.Fatal("stale captured pin intent was retargeted or silently ignored")
+			}
+		})
+	}
+}
+
+func TestLatePinReplyCannotRevivePriorActor(t *testing.T) {
+	rt, _ := browserFixture(t)
 	rt.pinCancel = func() {}
+	rt.pinAction = &pinAction{id: 1, mode: "single"}
 	rt.pinGen = 2
 	captureStdout(t, func() {
 		rt.stopForReconnect(errors.New("binding-changed: actor changed"))
 		rt.handlePinDone(event{token: 2})
 	})
-	if rt.pinCancel != nil || rt.picker != nil || rt.browser.snapshot != nil {
+	if rt.pinCancel != nil || rt.pinAction != nil || rt.browser.snapshot != nil {
 		t.Fatal("late mutation completion revived old actor state")
+	}
+}
+
+func TestPinCompletionEnsuresNamedStateWithoutInventingAChange(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		rt, snapshot := browserFixture(t)
+		isolatePinCommands(t, rt)
+		pending := &pinAction{id: 1, mode: "tree", remove: remove}
+		rt.pinAction, rt.pinCancel, rt.pinGen = pending, func() {}, 4
+		captureStdout(t, func() { rt.handlePinDone(event{token: 3}) })
+		if rt.pinCancel == nil || rt.pinAction != pending || rt.bench.launchCancel != nil {
+			t.Fatal("stale completion released an in-flight pin or refreshed another intent")
+		}
+		captureStdout(t, func() { rt.handlePinDone(event{token: 4}) })
+		state := "present"
+		if remove {
+			state = "absent"
+		}
+		// Native success can be a same-kind race/no-op; only the ensured state is known.
+		if !strings.Contains(rt.notice, "Subtree pin for #1 ensured "+state) || strings.Contains(rt.notice, "Removed") || strings.Contains(rt.notice, "Added") {
+			t.Fatal("success invented a changed result or misidentified the pin kind/state")
+		}
+		if rt.pinCancel != nil || rt.pinAction != nil || rt.bench.launchCancel == nil || rt.browser.snapshot != snapshot {
+			t.Fatal("successful pin intent failed to refresh native truth or replaced it speculatively")
+		}
+		rt.cancelBenchLaunch(nil)
 	}
 }
 

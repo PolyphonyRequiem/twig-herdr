@@ -69,7 +69,7 @@ type runtime struct {
 	offsets         map[string]int
 	nativePath      string
 	browser         browserModel
-	picker          *pinPicker
+	pinAction       *pinAction
 	configuration   *configurationView
 	form            *configurationForm
 	mutationLabel   string
@@ -501,7 +501,7 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 		rt.handleFormKey(key)
 		return
 	}
-	if rt.mode == "bench" && rt.configuration != nil && rt.picker == nil {
+	if rt.mode == "bench" && rt.configuration != nil {
 		rt.handleConfigurationKey(key)
 		return
 	}

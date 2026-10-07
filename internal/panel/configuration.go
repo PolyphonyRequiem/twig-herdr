@@ -202,7 +202,7 @@ type configurationForm struct {
 }
 
 func (rt *runtime) leaveConfiguration() {
-	rt.configuration, rt.form, rt.picker = nil, nil, nil
+	rt.configuration, rt.form = nil, nil
 	rt.showBrowserHelp = false
 	rt.overlayOffset = 0
 }
@@ -224,13 +224,16 @@ func (rt *runtime) openConfiguration() {
 	}
 	rt.cancelQueuedViews()
 	rt.cancelReviewLookup(errors.New("Review superseded by Bench configuration"))
-	rt.picker, rt.form, rt.showBrowserHelp = nil, nil, false
+	rt.form, rt.showBrowserHelp = nil, false
 	rt.configuration = &configurationView{benchID: snapshot.BenchID}
 	rt.draw()
 }
 
 func (rt *runtime) openInput(kind, value string) {
 	if rt.mode != "bench" || rt.reconnectRequired || rt.pinCancel != nil {
+		return
+	}
+	if kind == "pin" && (rt.configuration == nil || rt.configuration.section != 0) {
 		return
 	}
 	snapshot := rt.browser.snapshot
@@ -246,7 +249,7 @@ func (rt *runtime) openInput(kind, value string) {
 	}
 	rt.cancelQueuedViews()
 	rt.cancelReviewLookup(errors.New("Review superseded by a Bench editor"))
-	rt.picker, rt.showBrowserHelp = nil, false
+	rt.showBrowserHelp = false
 	rt.form = &configurationForm{kind: kind, editor: newTextEditor(value), benchID: snapshot.BenchID, benchName: snapshot.BenchName, binding: rt.binding, settingsDigest: snapshot.Configuration.SettingsDigest}
 	rt.overlayOffset = 0
 	rt.draw()
@@ -283,18 +286,7 @@ func (rt *runtime) removeConfigurationSelection() {
 	c := rt.browser.snapshot.Configuration
 	i := max(0, min(view.selected[view.section], rt.configurationCount()-1))
 	if view.section == 0 {
-		pin := c.Pins[i]
-		node := BrowserNode{ID: pin.ID, Title: pin.Title, Type: pin.Type, State: pin.State}
-		if !pin.Cached {
-			node.Title = "uncached / unverified"
-		}
-		for _, explicit := range c.Pins {
-			if explicit.ID == pin.ID {
-				node.Pins = append(node.Pins, explicit.Mode)
-			}
-		}
-		rt.picker = &pinPicker{node: node, benchID: view.benchID, benchName: rt.browser.snapshot.BenchName, binding: rt.binding, settingsDigest: c.SettingsDigest, remove: true}
-		rt.overlayOffset = 0
+		rt.setNotice("Use p for Single pin or Shift+P for Subtree pin; each toggles only its named kind.", 0)
 		rt.draw()
 		return
 	}
@@ -311,17 +303,14 @@ func (rt *runtime) removeConfigurationSelection() {
 	}
 }
 
-func (rt *runtime) addConfigurationSelection(manual bool) {
+func (rt *runtime) addConfigurationSelection() {
 	if rt.configuration == nil {
 		return
 	}
 	switch rt.configuration.section {
 	case 0:
-		if manual {
-			rt.openInput("pin", "")
-		} else {
-			rt.openPicker(false)
-		}
+		rt.setNotice("Use i in Pins to enter a positive ID, or p / Shift+P to toggle the selected item's pin kind.", 0)
+		rt.draw()
 	case 1:
 		rt.openInput("area", "")
 	case 2:
@@ -353,11 +342,17 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 			section = 2
 		}
 		rt.chooseSection(section)
-	case key.MatchString("a", "p", "enter"):
-		rt.addConfigurationSelection(false)
+	case key.MatchString("P", "shift+p"):
+		rt.toggleSelectedPin("tree")
+	case key.MatchString("p"):
+		rt.toggleSelectedPin("single")
+	case key.MatchString("a", "enter"):
+		rt.addConfigurationSelection()
 	case key.MatchString("i"):
-		rt.openInput("pin", "")
-	case key.MatchString("d", "P", "shift+p", "delete"):
+		if c.section == 0 {
+			rt.openInput("pin", "")
+		}
+	case key.MatchString("d", "delete"):
 		rt.removeConfigurationSelection()
 	case key.MatchString("s"):
 		rt.beginSync()
@@ -421,6 +416,10 @@ func (rt *runtime) handleFormKey(key uv.KeyPressEvent) {
 		rt.draw()
 		return
 	}
+	if f.kind == "pin" && key.MatchString("p", "P", "shift+p") {
+		rt.confirmManualPin(key.MatchString("P", "shift+p"))
+		return
+	}
 	if key.MatchString("c") {
 		rt.form = nil
 		rt.draw()
@@ -447,6 +446,17 @@ func (rt *runtime) handleFormKey(key uv.KeyPressEvent) {
 	}
 }
 
+func (rt *runtime) confirmManualPin(tree bool) {
+	if rt.form == nil || rt.form.kind != "pin" || !rt.form.confirm {
+		return
+	}
+	rt.form.choice = 0
+	if tree {
+		rt.form.choice = 1
+	}
+	rt.beginConfigurationMutation()
+}
+
 func (rt *runtime) beginConfigurationMutation() {
 	f := rt.form
 	if f == nil || !f.confirm || rt.pinCancel != nil || rt.reconnectRequired || rt.closing {
@@ -467,11 +477,12 @@ func (rt *runtime) beginConfigurationMutation() {
 			rt.refuseForm(err.Error())
 			return
 		}
-		command := "track"
+		mode := "single"
 		if f.choice == 1 {
-			command = "track-tree"
+			mode = "tree"
 		}
-		args = []string{"workspace", command, strconv.Itoa(id)}
+		rt.beginPinMutation(pinAction{id: id, mode: mode, benchID: f.benchID, binding: f.binding, settingsDigest: f.settingsDigest})
+		return
 	} else {
 		action := "add"
 		if f.remove {
@@ -490,6 +501,7 @@ func (rt *runtime) beginConfigurationMutation() {
 	gen := rt.pinGen
 	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
 	rt.pinCancel = cancel
+	rt.pinAction = nil
 	rt.mutationLabel = "Configuration"
 	rt.setNotice("Changing local Bench configuration…", 0)
 	rt.draw()
@@ -598,19 +610,25 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 	if count == 0 {
 		logical = append(logical, configurationLine{text: "No saved selectors in this section. Add one below.", row: -1})
 	}
-	logical = append(logical, configurationLine{text: "[a Add]", action: "add", row: -1})
 	if view.section == 0 {
+		if node := rt.selectedPinNode(); node != nil {
+			for _, mode := range []string{"single", "tree"} {
+				logical = append(logical, configurationLine{text: rt.pinButton(mode), action: "pin-" + mode, row: -1})
+			}
+		}
 		logical = append(logical, configurationLine{text: "[i Enter any ID]", action: "manual-id", row: -1})
-	}
-	if count > 0 {
-		logical = append(logical, configurationLine{text: "[d Remove selected]", action: "remove", row: -1})
+	} else {
+		logical = append(logical, configurationLine{text: "[a Add]", action: "add", row: -1})
+		if count > 0 {
+			logical = append(logical, configurationLine{text: "[d Remove selected]", action: "remove", row: -1})
+		}
 	}
 	if view.section == 1 {
 		logical = append(logical, configurationLine{text: "Areas OR together, then AND chosen sprints. No areas means no area restriction; it does not enable automatic membership.", row: -1})
 	} else if view.section == 2 {
 		logical = append(logical, configurationLine{text: "Sprints OR together: @Current, @Current+1, @Current-1, or absolute iteration paths. Saved rules drive cached reads and scoped sync.", row: -1})
 	} else {
-		logical = append(logical, configurationLine{text: "Pins are additive regardless of automatic filters. Uncached IDs stay unverified until scoped sync. Remove deletes both explicit modes for that ID, never inherited membership or protected seeds/pending edits.", row: -1})
+		logical = append(logical, configurationLine{text: "p toggles only Single pin; Shift+P only Subtree pin. Both can coexist. Other pin kinds, inherited membership, automatic rules and protected work remain. Uncached IDs stay unverified until scoped sync.", row: -1})
 	}
 	return wrapConfigurationLines(logical, cols)
 }
@@ -735,7 +753,7 @@ func (rt *runtime) drawConfigurationForm(out *strings.Builder, cols, visible int
 			lines = append(lines, configurationLine{text: preview, row: -1})
 		}
 		if !f.remove && (f.kind == "pin" || f.kind == "area") {
-			choices := []string{"Single item", "Whole subtree"}
+			choices := []string{rt.manualPinButton(false), rt.manualPinButton(true)}
 			if f.kind == "area" {
 				choices = []string{"Under (include descendants)", "Exact (this area only)"}
 			}
@@ -744,7 +762,14 @@ func (rt *runtime) drawConfigurationForm(out *strings.Builder, cols, visible int
 				if i == f.choice {
 					prefix = "› "
 				}
-				lines = append(lines, configurationLine{text: prefix + choice, action: "choice", row: i})
+				action := "choice"
+				if f.kind == "pin" {
+					action = "pin-single"
+					if i == 1 {
+						action = "pin-tree"
+					}
+				}
+				lines = append(lines, configurationLine{text: prefix + choice, action: action, row: i})
 			}
 		}
 		if !f.remove {
@@ -816,6 +841,10 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 			case "config-choice":
 				rt.form.choice = hit.row
 				rt.draw()
+			case "config-pin-single":
+				rt.confirmManualPin(false)
+			case "config-pin-tree":
+				rt.confirmManualPin(true)
 			case "config-edit":
 				rt.form.confirm = false
 				rt.draw()
@@ -828,11 +857,15 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 				rt.configuration.selected[rt.configuration.section] = hit.row
 				rt.draw()
 			case "config-add":
-				rt.addConfigurationSelection(false)
+				rt.addConfigurationSelection()
 			case "config-manual-id":
 				rt.openInput("pin", "")
 			case "config-remove":
 				rt.removeConfigurationSelection()
+			case "config-pin-single":
+				rt.toggleSelectedPin("single")
+			case "config-pin-tree":
+				rt.toggleSelectedPin("tree")
 			case "config-back":
 				rt.leaveConfiguration()
 				rt.draw()

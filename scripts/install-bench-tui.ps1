@@ -18,6 +18,10 @@ function Assert-BenchCompanion([string]$Path) {
     if ($LASTEXITCODE -ne 0 -or $ConfigurationHelp -notmatch '--expect-bench') {
         throw 'Native companion must support guarded bench configuration. Publish the updated Twig source first.'
     }
+    $UnpinHelp = & $Path workspace untrack --help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $UnpinHelp -notmatch '--mode') {
+        throw 'Native companion must support type-specific workspace untrack --mode. Publish the updated Twig source first.'
+    }
     if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Path) 'e_sqlite3.dll') -PathType Leaf)) {
         throw 'Native companion must include its e_sqlite3.dll dependency.'
     }

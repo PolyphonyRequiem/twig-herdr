@@ -72,15 +72,13 @@ type browserModel struct {
 	dirty      bool
 }
 
-type pinPicker struct {
-	node           BrowserNode // captured target; never follows a refresh or selection change
+type pinAction struct {
+	id             int
+	mode           string
+	remove         bool
 	benchID        string
-	benchName      string
 	binding        HostBinding
 	settingsDigest string
-	remove         bool
-	choice         int
-	explanation    string
 }
 
 type hitTarget struct {
@@ -114,7 +112,7 @@ func nativeOutput(ctx context.Context, executable, cwd string, args ...string) (
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("semantic bench command failed: %w: %s %s; install twig-bench-native beside this browser or upgrade Twig to support --include-browser and --expect-bench", err, strings.TrimSpace(string(output)), strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("semantic bench command failed: %w: %s %s; install a matching twig-bench-native beside this browser or upgrade Twig to support browser/configuration v1, captured-origin/settings guards and workspace untrack --mode single|tree", err, strings.TrimSpace(string(output)), strings.TrimSpace(stderr.String()))
 	}
 	return output, nil
 }
@@ -256,10 +254,7 @@ func (rt *runtime) handleBrowserLoaded(ev event) {
 		rt.form = nil
 		rt.setNotice("Bench changed; captured input canceled.", 0)
 	}
-	if rt.picker != nil && rt.picker.benchID != ev.browser.BenchID {
-		rt.picker = nil
-		rt.setNotice("Bench changed; pin picker canceled. Select the target again.", 0)
-	} else if strings.HasPrefix(rt.notice, "Twig bench refresh failed") {
+	if strings.HasPrefix(rt.notice, "Twig bench refresh failed") {
 		rt.notice = ""
 	}
 	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
@@ -547,37 +542,29 @@ func (rt *runtime) toggleFold(index int) {
 }
 
 func (rt *runtime) handleBrowserKey(key uv.KeyPressEvent) bool {
-	if rt.picker != nil {
-		rt.handlePickerKey(key)
+	if rt.showBrowserHelp {
+		if rt.scrollOverlayKey(key) {
+			return true
+		}
+		rt.showBrowserHelp = false
+		rt.draw()
 		return true
 	}
 	if key.MatchString("b") {
 		rt.openConfiguration()
 		return true
 	}
-	if key.MatchString("i") {
-		rt.openInput("pin", "")
-		return true
-	}
 	if key.MatchString("P", "shift+p") {
-		rt.openPicker(true)
+		rt.toggleSelectedPin("tree")
 		return true
 	}
 	if key.MatchString("p") {
-		rt.openPicker(false)
+		rt.toggleSelectedPin("single")
 		return true
 	}
 	if key.MatchString("?") {
 		rt.showBrowserHelp = !rt.showBrowserHelp
 		rt.overlayOffset = 0
-		rt.draw()
-		return true
-	}
-	if rt.showBrowserHelp {
-		if rt.scrollOverlayKey(key) {
-			return true
-		}
-		rt.showBrowserHelp = false
 		rt.draw()
 		return true
 	}
@@ -646,95 +633,98 @@ func (rt *runtime) handleBrowserKey(key uv.KeyPressEvent) bool {
 	return true
 }
 
-func (rt *runtime) openPicker(remove bool) {
+// Both viewer and configuration gestures capture an explicit add/remove intent.
+// Native operations are idempotent: a same-kind race never flips the new state.
+func (rt *runtime) selectedPinNode() *BrowserNode {
+	if rt.configuration != nil {
+		if rt.configuration.section != 0 || rt.configurationCount() == 0 {
+			return nil
+		}
+		pins := rt.browser.snapshot.Configuration.Pins
+		i := max(0, min(rt.configuration.selected[0], len(pins)-1))
+		pin := pins[i]
+		return &BrowserNode{ID: pin.ID, Title: pin.Title, Type: pin.Type, State: pin.State}
+	}
+	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+	if i := rt.browser.selectedIndex(); i >= 0 {
+		return rt.browser.rows[i].node
+	}
+	return nil
+}
+
+func explicitPin(snapshot *BrowserSnapshot, id int, mode string) bool {
+	if snapshot == nil || snapshot.Configuration == nil {
+		return false
+	}
+	for _, pin := range snapshot.Configuration.Pins {
+		if pin.ID == id && pin.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func (rt *runtime) toggleSelectedPin(mode string) {
+	if rt.mode != "bench" || rt.form != nil || rt.reconnectRequired || rt.closing {
+		return
+	}
+	if rt.configuration != nil && rt.configuration.section != 0 {
+		rt.setNotice("Pin gestures apply only to work items in the Pins section.", 0)
+		rt.draw()
+		return
+	}
 	if rt.pinCancel != nil {
 		rt.setNotice("Pin change is still in progress.", 0)
 		rt.draw()
 		return
 	}
-	b := &rt.browser
-	b.ensureLayout(rt.benchView, rt.contentCols())
-	i := b.selectedIndex()
-	if b.snapshot == nil {
+	snapshot := rt.browser.snapshot
+	if snapshot == nil {
 		rt.setNotice("Wait for the Bench to load before changing pins.", 0)
 		rt.draw()
 		return
 	}
-	if i < 0 {
-		if !remove {
-			rt.openInput("pin", "")
-		} else {
-			rt.setNotice("No selected item; open Bench configuration to inspect explicit pins.", 0)
-			rt.draw()
-		}
+	node := rt.selectedPinNode()
+	if node == nil {
+		rt.setNotice("Select an item or use b Bench configuration > Pins > i to enter an ID.", 0)
+		rt.draw()
 		return
 	}
-	node := *b.rows[i].node
-	node.Pins = append([]string(nil), node.Pins...)
-	node.OwningSubtreeIDs = append([]int(nil), node.OwningSubtreeIDs...)
-	p := &pinPicker{node: node, benchID: b.snapshot.BenchID, benchName: b.snapshot.BenchName, binding: rt.binding, settingsDigest: configurationDigest(b.snapshot), remove: remove}
 	if node.IsSeed || node.ID <= 0 {
-		p.explanation = "Seeds cannot be pinned. Publish this seed first; no selectors were changed."
-	} else if remove && len(node.Pins) == 0 {
-		if len(node.OwningSubtreeIDs) > 0 {
-			var owners []string
-			for _, id := range node.OwningSubtreeIDs {
-				owners = append(owners, "#"+strconv.Itoa(id))
-			}
-			p.explanation = "No explicit pins to remove. Inherited from subtree pins " + strings.Join(owners, ", ") + ". Change those pins instead; inherited membership remains."
-		} else {
-			p.explanation = "No explicit pins to remove. Native membership: " + safe(node.Membership) + "."
-		}
+		rt.setNotice("Seeds cannot be pinned. Publish this seed first; no selectors were changed.", 0)
+		rt.draw()
+		return
 	}
-	rt.picker = p
-	rt.overlayOffset = 0
-	rt.draw()
+	if err := validateConfiguration(snapshot.Configuration); err != nil {
+		rt.setError(err.Error())
+		rt.draw()
+		return
+	}
+	action := pinAction{id: node.ID, mode: mode, remove: explicitPin(snapshot, node.ID, mode), benchID: snapshot.BenchID, binding: rt.binding, settingsDigest: configurationDigest(snapshot)}
+	rt.beginPinMutation(action)
 }
 
-func (rt *runtime) handlePickerKey(key uv.KeyPressEvent) {
-	p := rt.picker
-	if !p.remove && key.MatchString("i") {
-		rt.picker = nil
-		rt.openInput("pin", "")
-		return
+func (p pinAction) args() []string {
+	command := "track"
+	if p.mode == "tree" {
+		command = "track-tree"
 	}
-	if key.MatchString("esc", "c", "q") {
-		rt.picker = nil
-		rt.draw()
-		return
+	args := []string{"workspace", command, strconv.Itoa(p.id)}
+	if p.remove {
+		args = []string{"workspace", "untrack", strconv.Itoa(p.id), "--mode", p.mode}
 	}
-	if rt.scrollOverlayKey(key) {
-		return
-	}
-	if p.explanation != "" {
-		if key.MatchString("enter", "space", " ") {
-			rt.picker = nil
-			rt.draw()
-		}
-		return
-	}
-	if key.MatchString("up", "k", "left", "down", "j", "right", "tab") {
-		p.choice = 1 - p.choice
-		rt.draw()
-		return
-	}
-	if !p.remove && key.MatchString("1", "2") {
-		if key.MatchString("1") {
-			p.choice = 0
-		} else {
-			p.choice = 1
-		}
-		rt.draw()
-		return
-	}
-	if key.MatchString("enter", "space", " ") {
-		rt.beginPinMutation()
-	}
+	return semanticArgs(append(args, "--expect-bench", p.benchID, "--expect-settings", p.settingsDigest, "-o", "json"), p.binding)
 }
 
-func (rt *runtime) beginPinMutation() {
-	p := rt.picker
-	if p == nil || p.explanation != "" || rt.pinCancel != nil || rt.reconnectRequired || rt.closing {
+func pinKind(mode string) string {
+	if mode == "tree" {
+		return "Subtree pin"
+	}
+	return "Single pin"
+}
+
+func (rt *runtime) beginPinMutation(p pinAction) {
+	if rt.pinCancel != nil || rt.reconnectRequired || rt.closing {
 		return
 	}
 	if rt.syncCancel != nil {
@@ -742,37 +732,31 @@ func (rt *runtime) beginPinMutation() {
 		rt.draw()
 		return
 	}
-	if p.remove && p.choice == 1 {
-		rt.picker = nil
-		rt.draw()
-		return
-	}
 	if !rt.matchesCapture(p.benchID, p.binding, p.settingsDigest) {
-		rt.picker = nil
-		rt.setNotice("Bench or binding changed; pin picker canceled.", 0)
+		rt.setNotice("Bench, origin or settings changed; pin action refused without retargeting.", 0)
 		rt.draw()
 		return
 	}
-	command := "track"
-	if p.remove {
-		command = "untrack"
-	} else if p.choice == 1 {
-		command = "track-tree"
-	}
-	rt.picker = nil
+	rt.form = nil
+	rt.cancelQueuedViews()
+	rt.cancelReviewLookup(errors.New("Review superseded by pin change"))
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("pin change superseded refresh"))
 	rt.pinGen++
 	gen := rt.pinGen
 	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
-	rt.pinCancel = cancel
-	rt.setNotice("Changing local Bench pins…", 0)
-	rt.mutationLabel = "Pin"
+	rt.pinCancel, rt.pinAction = cancel, &p
+	verb := "Adding"
+	if p.remove {
+		verb = "Removing"
+	}
+	rt.setNotice(fmt.Sprintf("%s %s for #%d…", verb, strings.ToLower(pinKind(p.mode)), p.id), 0)
+	rt.mutationLabel = pinKind(p.mode)
 	rt.draw()
 	go func() {
 		err := rt.semanticAuthority(ctx, p.binding)
 		if err == nil {
-			_, err = nativeOutput(ctx, rt.nativePath, rt.cfg.Cwd, semanticArgs([]string{"workspace", command, strconv.Itoa(p.node.ID), "--expect-bench", p.benchID, "--expect-settings", p.settingsDigest, "-o", "json"}, p.binding)...)
+			_, err = nativeOutput(ctx, rt.nativePath, rt.cfg.Cwd, p.args()...)
 		}
 		admissionErr := rt.postSemanticAdmission(p.binding)
 		rt.emit(event{kind: evPinDone, token: gen, err: err, admissionErr: admissionErr})
@@ -785,6 +769,8 @@ func (rt *runtime) handlePinDone(ev event) {
 	}
 	rt.pinCancel()
 	rt.pinCancel = nil
+	p := rt.pinAction
+	rt.pinAction = nil
 	if ev.admissionErr != nil {
 		rt.stopForReconnect(ev.admissionErr)
 		return
@@ -795,10 +781,16 @@ func (rt *runtime) handlePinDone(ev event) {
 			return
 		}
 		rt.setError(rt.mutationLabel + " change refused: " + safe(ev.err.Error()))
+	} else if p != nil {
+		state := "present"
+		if p.remove {
+			state = "absent"
+		}
+		rt.setNotice(fmt.Sprintf("%s for #%d ensured %s; other pin kinds retained. Refreshing native membership.", pinKind(p.mode), p.id, state), 0)
 	} else {
 		rt.setNotice("Local Bench settings updated; refreshing membership.", 0)
 	}
-	// Refusal can mean the current Bench changed while a picker was open.
+	// A refusal can mean the captured Bench or settings changed before admission.
 	// Fetch native truth on either outcome without retargeting the mutation.
 	rt.beginBenchRefresh(nil, true)
 	rt.draw()
@@ -810,7 +802,7 @@ func (rt *runtime) cancelPins() {
 		rt.pinCancel()
 		rt.pinCancel = nil
 	}
-	rt.picker = nil
+	rt.pinAction = nil
 	rt.leaveConfiguration()
 }
 
@@ -830,12 +822,12 @@ func (rt *runtime) handleAdmittedMouse(mouse uv.Mouse) {
 	if rt.closing || rt.reconnectRequired {
 		return
 	}
-	if rt.form != nil || (rt.configuration != nil && rt.picker == nil) {
+	if rt.form != nil || rt.configuration != nil {
 		rt.handleConfigurationMouse(mouse)
 		return
 	}
 	if mouse.Button == uv.MouseWheelUp || mouse.Button == uv.MouseWheelDown {
-		if rt.picker != nil || rt.showBrowserHelp {
+		if rt.showBrowserHelp {
 			step := 3
 			if mouse.Button == uv.MouseWheelUp {
 				step = -step
@@ -869,33 +861,19 @@ func (rt *runtime) handleAdmittedMouse(mouse uv.Mouse) {
 			continue
 		}
 		switch hit.action {
-		case "pin":
-			rt.openPicker(false)
-		case "unpin":
-			rt.openPicker(true)
+		case "pin-single":
+			rt.toggleSelectedPin("single")
+		case "pin-tree":
+			rt.toggleSelectedPin("tree")
 		case "configure":
 			rt.openConfiguration()
-		case "manual-id":
-			rt.picker = nil
-			rt.openInput("pin", "")
 		case "help":
 			rt.showBrowserHelp = !rt.showBrowserHelp
 			rt.overlayOffset = 0
 			rt.draw()
 		case "cancel":
-			rt.picker = nil
 			rt.showBrowserHelp = false
 			rt.draw()
-		case "choice0", "choice1":
-			if rt.picker != nil {
-				rt.picker.choice = 0
-				if hit.action == "choice1" {
-					rt.picker.choice = 1
-				}
-				rt.draw()
-			}
-		case "confirm":
-			rt.beginPinMutation()
 		case "select":
 			rt.browser.selectIndex(hit.row)
 			rt.draw()

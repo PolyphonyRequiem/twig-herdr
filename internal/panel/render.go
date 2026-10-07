@@ -90,8 +90,6 @@ func (rt *runtime) draw() {
 		rt.browser.ensureLayout(rt.benchView, cols)
 		if rt.form != nil {
 			rt.drawConfigurationForm(&out, cols, contentRows)
-		} else if rt.picker != nil {
-			rt.drawPicker(&out, cols, contentRows)
 		} else if rt.showBrowserHelp {
 			rt.drawBrowserHelp(&out, cols, contentRows)
 		} else if rt.configuration != nil {
@@ -167,18 +165,21 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 	switch {
 	case rt.form != nil:
 		buttons = []button{{"[OK]", "config-confirm"}, {"[Cancel]", "config-cancel"}}
-	case rt.picker != nil || rt.showBrowserHelp:
-		buttons = []button{{"[OK]", "confirm"}, {"[Cancel]", "cancel"}, {"[Close]", "cancel"}, {"[i ID]", "manual-id"}}
+		if rt.form.kind == "pin" && rt.form.confirm {
+			buttons = append(buttons, button{rt.manualPinButton(false), "config-pin-single"}, button{rt.manualPinButton(true), "config-pin-tree"})
+		}
+	case rt.showBrowserHelp:
+		buttons = []button{{"[Close]", "cancel"}}
 	case rt.configuration != nil:
 		buttons = []button{{"[a Add]", "config-add"}, {"[d Remove]", "config-remove"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
+		if rt.configuration.section == 0 {
+			buttons = []button{{rt.pinButton("single"), "config-pin-single"}, {rt.pinButton("tree"), "config-pin-tree"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
+		}
 		if cols < 55 {
-			buttons = []button{{"[a]", "config-add"}, {"[d]", "config-remove"}, {"[i]", "config-manual-id"}, {"[Esc]", "config-back"}}
+			buttons = append(buttons, button{"[a]", "config-add"}, button{"[d]", "config-remove"}, button{"[i]", "config-manual-id"}, button{"[Esc]", "config-back"})
 		}
 	default:
-		buttons = []button{{"[b Bench]", "configure"}, {"[p Pin]", "pin"}, {"[i ID]", "manual-id"}, {"[P Unpin]", "unpin"}, {"[? Help]", "help"}}
-		if cols < 55 {
-			buttons = []button{{"[b]", "configure"}, {"[p]", "pin"}, {"[i]", "manual-id"}, {"[P]", "unpin"}, {"[?]", "help"}}
-		}
+		buttons = []button{{rt.pinButton("single"), "pin-single"}, {rt.pinButton("tree"), "pin-tree"}, {"[b Bench]", "configure"}, {"[? Help]", "help"}, {"[b]", "configure"}, {"[?]", "help"}}
 	}
 	plain := ansi.Strip(rt.footerText(truncated))
 	for _, button := range buttons {
@@ -197,17 +198,6 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 func (rt *runtime) headerText() string {
 	if rt.form != nil {
 		return fmt.Sprintf("Bench Configuration · %s · Bench: %s", strings.Title(rt.form.kind), safe(rt.form.benchName))
-	}
-	if rt.picker != nil {
-		verb := "Pin"
-		if rt.picker.remove {
-			verb = "Unpin"
-		}
-		prefix := ""
-		if rt.configuration != nil {
-			prefix = "Bench Configuration · "
-		}
-		return fmt.Sprintf("%s%s #%d · %s · Bench: %s", prefix, verb, rt.picker.node.ID, safe(rt.picker.node.Title), safe(rt.picker.benchID))
 	}
 	bench := rt.benchSummary
 	if bench == "" {
@@ -243,9 +233,9 @@ func (rt *runtime) footerText(truncated bool) string {
 		bits = append(bits, "\x1b[38;2;255;190;105m"+safe(rt.notice)+"\x1b[38;2;152;175;195m")
 	}
 	mode := rt.benchView
-	buttons := "[b Bench] [p Pin] [i ID] [P Unpin] [? Help]"
+	buttons := rt.pinButton("single") + " " + rt.pinButton("tree") + " [b Bench] [? Help]"
 	if rt.size.cols < 55 {
-		buttons = "[b] [p] [i] [P] [?]"
+		buttons = rt.pinButton("single") + " " + rt.pinButton("tree") + " [b] [?]"
 	}
 	help := buttons + " · 1 table · 2 tree · 3 review · s sync · r refresh · j/k select · ←/→/Space fold · wheel scroll · q close"
 	if rt.mode == "review" {
@@ -257,35 +247,63 @@ func (rt *runtime) footerText(truncated bool) string {
 		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
 	}
 	if rt.form != nil {
+		if rt.form.kind == "pin" && rt.form.confirm {
+			return rt.manualPinButton(false) + " " + rt.manualPinButton(true) + " [OK] [Cancel] · p/P choose and add · Enter adds chosen kind · Esc cancel"
+		}
 		return "[OK] [Cancel] · Enter review/confirm · Esc cancel · Ctrl+C quit"
-	}
-	if rt.picker != nil {
-		if rt.syncCancel != nil {
-			return "[Cancel] · Sync in progress; pin confirmation waits"
-		}
-		if rt.picker.explanation != "" {
-			return "[Close] · Enter/Esc close · wheel/PgUp/PgDn scroll"
-		}
-		idButton := " [i ID]"
-		if rt.picker.remove {
-			idButton = ""
-		}
-		return "[OK] [Cancel]" + idButton + " · Enter confirm · ↑/↓ choose · Esc cancel · wheel/PgUp/PgDn scroll"
 	}
 	if rt.showBrowserHelp {
 		return "[Close] · PgUp/PgDn/wheel scroll · other key returns"
 	}
 	if rt.configuration != nil {
-		if rt.size.cols < 55 {
-			return "[a] [d] [i] [Esc] · CONFIGURATION · Tab sections · s sync"
+		if rt.configuration.section == 0 {
+			return rt.pinButton("single") + " " + rt.pinButton("tree") + " [i ID] [Esc Back] · CONFIGURATION · Tab sections · s sync · r refresh"
 		}
-		return "[a Add] [d Remove] [i ID] [Esc Back] · CONFIGURATION · Tab/1/2/3 sections · j/k select · s sync · r refresh · q close"
+		if rt.size.cols < 55 {
+			return "[a] [d] [Esc] · CONFIGURATION · Tab sections · s sync"
+		}
+		return "[a Add] [d Remove] [Esc Back] · CONFIGURATION · Tab/1/2/3 sections · j/k select · s sync · r refresh · q close"
 	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
-	if rt.mode == "bench" && !rt.reconnectRequired && rt.picker == nil && !rt.showBrowserHelp {
+	if rt.mode == "bench" && !rt.reconnectRequired && !rt.showBrowserHelp {
 		return buttons + " · " + strings.Join(bits[:len(bits)-2], " · ") + strings.TrimPrefix(help, buttons) + " · " + safe(strings.ToUpper(mode))
 	}
 	return strings.Join(bits, "  ·  ")
+}
+
+func (rt *runtime) pinButton(mode string) string {
+	verb := "Pin"
+	if node := rt.selectedPinNode(); node != nil {
+		if node.IsSeed || node.ID <= 0 {
+			verb = "Disabled"
+		} else if explicitPin(rt.browser.snapshot, node.ID, mode) {
+			verb = "Unpin"
+		}
+	}
+	key, label := "p", "single"
+	if mode == "tree" {
+		key, label = "P", "subtree"
+		if rt.size.cols < 55 {
+			label = "tree"
+		}
+	}
+	if rt.size.cols < 55 {
+		state := "+"
+		if verb == "Unpin" {
+			state = "-"
+		} else if verb == "Disabled" {
+			state = "x"
+		}
+		return fmt.Sprintf("[%s %s%s]", key, state, label)
+	}
+	return fmt.Sprintf("[%s %s %s]", key, verb, label)
+}
+
+func (rt *runtime) manualPinButton(tree bool) string {
+	if tree {
+		return "[P Pin subtree]"
+	}
+	return "[p Pin single]"
 }
 
 func sessionLine(sess *session, index, width int) uv.Line {
@@ -331,7 +349,7 @@ func (rt *runtime) drawBrowserRows(out *strings.Builder, cols, visible int) {
 				if b.snapshot == nil {
 					out.WriteString(ansi.Truncate("Loading semantic Bench…", cols, "…"))
 				} else {
-					out.WriteString(ansi.Truncate("This Bench has no displayed work items. Sync or add a native Bench pin.", cols, "…"))
+					out.WriteString(ansi.Truncate("No displayed work items. b Bench configuration > Pins > i adds an ID.", cols, "…"))
 				}
 			}
 			continue
@@ -358,49 +376,17 @@ func (rt *runtime) drawBrowserRows(out *strings.Builder, cols, visible int) {
 	}
 }
 
-func (rt *runtime) drawPicker(out *strings.Builder, cols, visible int) {
-	p := rt.picker
-	title := fmt.Sprintf("Pin %s #%d — %s", safe(p.node.Type), p.node.ID, safe(p.node.Title))
-	if p.remove {
-		title = fmt.Sprintf("Remove explicit pins from %s #%d — %s", safe(p.node.Type), p.node.ID, safe(p.node.Title))
-	}
-	var lines []string
-	if p.explanation != "" {
-		lines = append(lines, p.explanation)
-	} else if p.remove {
-		lines = append(lines, "Remove: "+strings.Join(p.node.Pins, " + ")+" explicit pin(s). Inherited membership is not removed.")
-	} else {
-		lines = append(lines, "Choose a local durable selector. This does not change the active Twig work item or write to ADO.")
-	}
-	bench := safe(p.benchName)
-	if bench == "" {
-		bench = safe(p.benchID)
-	}
-	lines = append(lines, title, "Bench: "+bench+" ("+safe(p.benchID)+")")
-	// Reserve the final viewport lines for controls, even on narrow terminals.
-	buttons := []struct{ text, action string }{}
-	if p.explanation == "" {
-		first, second := "1 Single item", "2 Whole subtree"
-		if p.remove {
-			first, second = "Remove explicit pins", "Keep pins (cancel)"
-		}
-		if p.choice == 0 {
-			first = "› " + first
-		} else {
-			first = "  " + first
-		}
-		if p.choice == 1 {
-			second = "› " + second
-		} else {
-			second = "  " + second
-		}
-		buttons = append(buttons, struct{ text, action string }{first, "choice0"}, struct{ text, action string }{second, "choice1"})
-	}
-	rt.drawOverlay(out, cols, visible, lines, buttons)
-}
-
 func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
-	lines := []string{"Bench browser — local selection, not twig set", "j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.", "Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.", "b opens Bench Configuration with Pins / Areas / Sprints. Tab or 1/2/3 chooses a section; a adds, d removes after confirmation. Esc returns to the same viewer, selection, folds and viewport.", "p opens Single item / Whole subtree pin picker for the selected item. i enters any positive ID, even with an empty Bench; unknown IDs remain uncached/unverified. Shift+P removes both explicit pin kinds after confirmation. Inherited membership and seeds explain rather than mutate.", "Area choices are Exact or Under. Sprints accept @Current, @Current±N or absolute paths. Alternatives OR within each section; areas AND sprints. No chosen sprints disables automatic membership; pins and protected seeds/pending edits remain additive. Ownership scope is displayed, never changed here.", "Text fields treat q/c/s/p as text; Enter reviews then confirms, Esc cancels the field first, Ctrl+C always quits. Changes are guarded against the captured Bench, native origin and settings digest. No native command runs per keystroke.", "1/2 switch cached Table/Tree; r fetches native membership; s pulls only this Bench and saved-rule candidates from ADO, never shared workspace area/sprint settings. 3 opens the latest unresolved proposal snapshot. Review keeps b=brief and never pins, authorizes, or applies.", "Ctrl+R acknowledges connection changes. Selection and folds survive refresh; reconnect clears all cached data and configuration forms."}
+	lines := []string{
+		"Bench browser — local selection, not twig set",
+		"j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.",
+		"Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.",
+		"p toggles the selected item's explicit Single pin; Shift+P toggles its explicit Subtree pin. Both can coexist. Each gesture changes only that kind; other pins, inherited membership, query rules and protected work remain. Inherited-only rows gain their own pin; ancestor pins are never removed. Seeds must be published first.",
+		"The footer shows Pin/Unpin for each kind from native cached explicit pins. Click those named controls for the same action as p/Shift+P. A busy pin action cannot be repeated; native origin, Bench and settings guards refuse stale captures. Membership refreshes from native truth afterward.",
+		"b opens Bench Configuration with Pins / Areas / Sprints. Tab or 1/2/3 chooses a section. Pins uses the same p/Shift+P toggles, including uncached IDs. Areas/Sprints use a add and d remove with review; p/P never pin those entries. Esc returns to the same viewer, selection, folds and viewport.",
+		"Manual IDs exist only in b Bench configuration > Pins > i. Enter validates a positive ID and opens review; p adds Single pin, Shift+P adds Subtree pin immediately. Enter adds the chosen kind. These are add intents, not toggles. Unknown IDs stay uncached/unverified until scoped sync. Text-entry q/c/p/P are text; Esc cancels input first.",
+		"s syncs only this Bench; r refreshes cached membership. 3 opens Review; review never pins or applies. Ctrl+R reconnects after an origin change. Ctrl+C always quits.",
+	}
 	rt.drawOverlay(out, cols, visible, lines, []struct{ text, action string }{{"[Close help]", "cancel"}})
 }
 

@@ -21,7 +21,7 @@ Requires twig on PATH; does not require Herdr or any Herdr environment variables
 Semantic Bench reads, pins, configuration and scoped sync prefer twig-bench-native.exe
 beside this browser (twig-bench-native on Unix); otherwise Twig must support browser
 v1/configuration v1 JSON, --include-browser, --expect-bench, --expect-binding,
---expect-identity and --expect-settings.
+--expect-identity, --expect-settings, and workspace untrack ID --mode single|tree.
 Normal Twig remains connection-status and proposal-review authority.
 --file opens a specific proposal; otherwise Review finds the latest unresolved proposal.
 Relative proposal paths resolve against --cwd (the current directory by default).
@@ -31,12 +31,16 @@ Keys:
   j/k or up/down select work items locally (not twig set), PgUp/PgDn/Home/End navigate
   left/right collapse/expand, Space toggle; click rows/disclosures; wheel scrolls
   b Bench Configuration (Pins / Areas / Sprints); Esc returns to the same viewer
-  Tab or 1/2/3 sections; a add, d remove; Enter reviews then confirms; Esc cancels
-  p selected-item pin picker; i any positive ID, even when Bench is empty
-  Unknown IDs stay uncached/unverified. Shift+P confirms both explicit modes' removal.
+  Tab or 1/2/3 sections; Areas/Sprints use a add, d remove; Enter reviews/confirms
+  p toggles only explicit Single pin; Shift+P only Subtree pin, in viewer or Pins
+  Both coexist; each removal retains other pin kinds and inherited/query membership
+  Manual IDs only in b Bench Configuration > Pins > i, including an empty Bench
+  Enter validates/reviews; p adds Single pin, Shift+P adds Subtree pin immediately
+  Enter adds the chosen kind. Unknown IDs stay uncached/unverified until scoped sync.
   Area Exact/Under; sprint @Current, @Current±N, or absolute iteration path
   Text fields treat q/c/s/p as text; Esc cancels the field first, Ctrl+C always quits
-  Click footer controls; ? discovery help; s Bench-scoped ADO pull, r refresh
+  Click named Pin/Unpin controls for the same p/Shift+P action; ? discovery help
+  s Bench-scoped ADO pull, r refresh; seeds cannot be pinned
   d details, b brief, Esc/c leave review, Ctrl+R reconnect, q/Ctrl+C quit
 
 Sync pulls only Bench members and saved automatic/relationship-rule candidates;
