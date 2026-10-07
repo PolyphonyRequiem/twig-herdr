@@ -23,9 +23,10 @@ Relative proposal paths resolve against --cwd (the current directory by default)
 
 Keys:
   1 workspace table, 2 bench tree, 3 proposal review
-  j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refresh
+  s sync from ADO (pull only), r refresh, j/k/arrows scroll, PgUp/PgDn/Home/End
   d details, b brief, Esc/c leave review, Ctrl+R reconnect, q/Ctrl+C quit
 
+Sync never flushes pending edits; an open review keeps its captured snapshot.
 Proposal review never authorizes or applies changes. Fresh observations and native
 operations are connection-checked; local navigation uses retained snapshots.
 Periodic checks clear retained data after connection changes. Standalone status

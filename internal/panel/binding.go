@@ -158,6 +158,7 @@ func (rt *runtime) stopForReconnect(err error) {
 	// Drop all prior actor's VT nodes, including scrollback and hidden restore data.
 	// Native proposal files, digests, authorizers and journals remain untouched.
 	rt.reconnectRequired = true
+	rt.cancelSync()
 	rt.reconnectReason = "binding-changed/reconnect: " + safe(err.Error()) + "; Ctrl+R or twig-herdr reconnect acknowledges a fresh runtime"
 	rt.bench.launchGen++
 	rt.review.launchGen++

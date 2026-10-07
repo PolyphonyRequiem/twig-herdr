@@ -66,6 +66,8 @@ type runtime struct {
 	admissionReply       chan Result
 	admissionActions     []event
 	admissionActionCount int
+	syncCancel           context.CancelFunc
+	syncGen              uint64
 
 	benchSummary string
 	offsets      map[string]int
@@ -145,6 +147,7 @@ const (
 	evLatestResolved
 	evNoticeExpire
 	evAdmissionResolved
+	evSyncDone
 )
 
 type event struct {
@@ -277,6 +280,8 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleLatestResolved(ev)
 			case evAdmissionResolved:
 				rt.handleAdmissionResolved(ev)
+			case evSyncDone:
+				rt.handleSyncDone(ev)
 			case evNoticeExpire:
 				if rt.noticeSeq == ev.token {
 					rt.admissionActions = append(rt.admissionActions, ev)
@@ -477,6 +482,10 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 
 func (rt *runtime) handleAdmittedKey(key uv.KeyPressEvent) {
 
+	if key.MatchString("s") {
+		rt.beginSync()
+		return
+	}
 	if rt.mode == "review" {
 		if key.MatchString("esc", "c") {
 			rt.beginExitReview(nil)
@@ -642,6 +651,10 @@ func (rt *runtime) reviewResize(next size) {
 func (rt *runtime) beginBenchRefresh(reply chan Result, force bool) {
 	if rt.reconnectRequired {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New(rt.reconnectReason)})
+		return
+	}
+	if rt.syncCancel != nil {
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New("sync is in progress")})
 		return
 	}
 	if rt.closing || rt.mode == "review" {

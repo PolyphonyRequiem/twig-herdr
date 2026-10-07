@@ -32,8 +32,10 @@ operations, plus digest-guarded interactive proposal preview. Upgrade CLI/plugin
 close legacy hosts and verify native quiescence before migration/admission.
 New benches open in Tree view; explicit Table choices are preserved.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
-j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refreshes the bench (redraw
-only during Review), d/b Details/Brief, Esc/c leaves Review, q closes the panel.
+j/k/arrows scroll, PgUp/PgDn/Home/End navigate, s syncs from ADO (pull only),
+r refreshes the bench (redraw only during Review), d/b Details/Brief,
+Esc/c leaves Review, q closes the panel. Sync never flushes pending edits;
+an open Review keeps its captured snapshot after sync.
 Ctrl+R explicitly acknowledges reconnect and launches a fresh admitted CLI runtime.
 Effective binding/principal changes clear previous actor data and disable refresh/view/review.
 Review never authorizes or applies changes; original native digest/origin remain intact.

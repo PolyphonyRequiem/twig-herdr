@@ -188,14 +188,14 @@ func (rt *runtime) footerText(truncated bool) string {
 		bits = append(bits, "\x1b[38;2;255;190;105m"+safe(rt.notice)+"\x1b[38;2;152;175;195m")
 	}
 	mode := rt.benchView
-	help := "1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · r refresh · q close"
+	help := "1 table · 2 tree · 3 review · s sync · r refresh · j/k scroll · PgUp/PgDn/Home/End · q close"
 	if rt.mode == "review" {
 		mode = "review"
-		help = "d details · b back · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close"
+		help = "d details · b back · s sync · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close"
 	}
 	if rt.reconnectRequired {
 		mode = "reconnect-required"
-		help = "Ctrl+R acknowledge/reconnect · q close; refresh/view/review disabled"
+		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
 	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
 	return strings.Join(bits, "  ·  ")
