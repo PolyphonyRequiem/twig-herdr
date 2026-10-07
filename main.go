@@ -33,16 +33,21 @@ Companion operations hold native connection admission and expected-origin guards
 status fingerprints detect host changes but are not atomic native snapshot tokens.
 Without the bundle, normal Twig must provide qualified-attachment-snapshot-v1
 host admission plus --include-browser, --expect-bench, --expect-binding,
---expect-identity and --expect-settings, configuration v1 in browser JSON, and
-workspace untrack ID --mode single|tree for independent pin removal.
+--expect-identity, --expect-settings, --expect-contents, configuration v1 in browser JSON,
+bench list --include-management v1, and workspace untrack ID --mode single|tree.
 No ANSI identity scraping or auth fallback is used.
 New benches open in Tree view; explicit Table choices are preserved.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k or up/down select local work items (not twig set), left/right collapse/expand,
 Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
-b opens Bench Configuration (Pins / Areas / Sprints); Esc returns to the same viewer.
-Tab or 1/2/3 chooses a section. Pins uses p/Shift+P independent toggles, including
+b opens Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer.
+Tab or 1/2/3/4 chooses a section. Pins uses p/Shift+P independent toggles, including
 uncached rows; Areas/Sprints use a add and d remove with review, never p/P pins.
+Benches: arrows/j/k choose, Enter selects, n creates an empty named Bench, d/Delete
+reviews exact saved pins/queries before Yes/Cancel. Default is protected. Deletion
+preserves staged work and falls back to default if current. Stale contents require
+a fresh list and a new confirmation. Click the named controls for keyboard parity.
+Selecting a Bench resets item selection/folds/scroll but keeps configuration open.
 p toggles only the selected item's explicit Single pin; Shift+P only Subtree pin.
 Both can coexist; removing one retains the other and inherited/query membership.
 Manual IDs are only in b Bench Configuration > Pins > i, including an empty Bench.

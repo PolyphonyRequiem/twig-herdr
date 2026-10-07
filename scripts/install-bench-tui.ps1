@@ -22,6 +22,14 @@ function Assert-BenchCompanion([string]$Path) {
     if ($LASTEXITCODE -ne 0 -or $UnpinHelp -notmatch '--mode') {
         throw 'Native companion must support type-specific workspace untrack --mode. Publish the updated Twig source first.'
     }
+    $ManagementHelp = & $Path bench list --help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $ManagementHelp -notmatch '--include-management' -or $ManagementHelp -notmatch '--expect-binding' -or $ManagementHelp -notmatch '--expect-identity') {
+        throw 'Native companion must support captured-origin bench list --include-management. Publish the updated Twig source first.'
+    }
+    $DeleteHelp = & $Path bench delete --help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $DeleteHelp -notmatch '--expect-bench' -or $DeleteHelp -notmatch '--expect-contents') {
+        throw 'Native companion must support target-ID and contents-digest guarded bench deletion. Publish the updated Twig source first.'
+    }
     if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Path) 'e_sqlite3.dll') -PathType Leaf)) {
         throw 'Native companion must include its e_sqlite3.dll dependency.'
     }

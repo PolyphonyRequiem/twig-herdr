@@ -28,6 +28,9 @@ type HostBinding struct {
 	Account         string `json:"account"`
 	IdentityName    string `json:"identity"`
 	WorktreeRoot    string `json:"worktreeRoot"`
+	Organization    string `json:"organization"`
+	Project         string `json:"project"`
+	Team            string `json:"team"`
 }
 
 func ReadHostBinding(ctx context.Context, cwd, expected string) (HostBinding, error) {
@@ -214,7 +217,7 @@ func (rt *runtime) stopForReconnect(err error) {
 	rt.cancelReviewSession(err)
 	rt.review.hasPendingResize = false
 	rt.review.hasPendingDensity = false
-	rt.benchSummary = "unavailable (original binding " + rt.binding.BindingID + ")"
+	rt.benchSummary = "unavailable"
 	rt.offsets = map[string]int{"table": 0, "tree": 0, "review": 0}
 	rt.setError(rt.reconnectReason)
 	rt.draw()

@@ -168,12 +168,25 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 		if rt.form.kind == "pin" && rt.form.confirm {
 			buttons = append(buttons, button{rt.manualPinButton(false), "config-pin-single"}, button{rt.manualPinButton(true), "config-pin-tree"})
 		}
+		if rt.form.kind == "bench" {
+			label := "[Create]"
+			if rt.form.remove {
+				label = "[Yes, delete]"
+			}
+			buttons = []button{{label, "config-confirm"}, {"[Cancel]", "config-cancel"}}
+		}
 	case rt.showBrowserHelp:
 		buttons = []button{{"[Close]", "cancel"}}
 	case rt.configuration != nil:
 		buttons = []button{{"[a Add]", "config-add"}, {"[d Remove]", "config-remove"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
 		if rt.configuration.section == 0 {
 			buttons = []button{{rt.pinButton("single"), "config-pin-single"}, {rt.pinButton("tree"), "config-pin-tree"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
+		}
+		if rt.configuration.section == 3 {
+			buttons = []button{{"[n Create]", "config-add"}, {"[Enter Select]", "config-bench-select"}, {"[Esc Back]", "config-back"}}
+			if target := rt.selectedManagedBench(); target != nil && !target.IsDefault {
+				buttons = append(buttons, button{"[d Delete]", "config-remove"})
+			}
 		}
 		if cols < 55 {
 			buttons = append(buttons, button{"[a]", "config-add"}, button{"[d]", "config-remove"}, button{"[i]", "config-manual-id"}, button{"[Esc]", "config-back"})
@@ -199,9 +212,6 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 }
 
 func (rt *runtime) headerText() string {
-	if rt.form != nil {
-		return fmt.Sprintf("Bench Configuration · %s · Bench: %s", strings.Title(rt.form.kind), safe(rt.form.benchName))
-	}
 	bench := rt.benchSummary
 	if bench == "" {
 		bench = "loading"
@@ -210,7 +220,7 @@ func (rt *runtime) headerText() string {
 	if rt.benchView == "tree" {
 		view = "Tree"
 	}
-	if rt.configuration != nil {
+	if rt.configuration != nil || rt.form != nil {
 		view = "Bench Configuration"
 	}
 	if rt.mode == "review" {
@@ -230,8 +240,27 @@ func (rt *runtime) headerText() string {
 	if account == "" {
 		account = "unavailable"
 	}
-	return fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · User: %s · Bench: \x1b[1m%s\x1b[22m · \x1b[2m%s\x1b[22m",
-		safe(view), safe(account), safe(bench), safe(subject))
+	connection := safe(strings.TrimSpace(rt.binding.Organization))
+	if project := safe(strings.TrimSpace(rt.binding.Project)); project != "" {
+		if connection != "" {
+			connection += "/"
+		}
+		connection += project
+	}
+	if connection == "" {
+		connection = "Connection unavailable"
+	}
+	// Reserve room for both connection and current Bench before optional context,
+	// account, view and cwd. Never expose storage/attachment IDs as labels.
+	width := max(rt.size.cols, 1)
+	labelWidth := max((width-24)/2, 1)
+	connection = ansi.Truncate(connection, labelWidth, "…")
+	bench = ansi.Truncate(safe(bench), labelWidth, "…")
+	header := fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Bench: \x1b[1m%s\x1b[22m · User: %s", connection, bench, safe(account))
+	if team := strings.TrimSpace(rt.binding.Team); team != "" {
+		header += " · Team: " + safe(team)
+	}
+	return header + " · " + safe(view) + " · \x1b[2m" + safe(subject) + "\x1b[22m"
 }
 
 func (rt *runtime) footerText(truncated bool) string {
@@ -257,6 +286,12 @@ func (rt *runtime) footerText(truncated bool) string {
 		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
 	}
 	if rt.form != nil {
+		if rt.form.kind == "bench" {
+			if rt.form.remove {
+				return "[Yes, delete] [Cancel] · Tab/←/→ choose · Enter chosen action · y yes · Esc/c cancel"
+			}
+			return "[Create] [Cancel] · Enter creates empty Bench · Esc cancels · Ctrl+C quits"
+		}
 		if rt.form.kind == "pin" && rt.form.confirm {
 			return rt.manualPinButton(false) + " " + rt.manualPinButton(true) + " [OK] [Cancel] · p/P choose and add · Enter adds chosen kind · Esc cancel"
 		}
@@ -266,13 +301,20 @@ func (rt *runtime) footerText(truncated bool) string {
 		return "[Close] · PgUp/PgDn/wheel scroll · other key returns"
 	}
 	if rt.configuration != nil {
+		if rt.configuration.section == 3 {
+			buttons := "[n Create] [Enter Select]"
+			if target := rt.selectedManagedBench(); target != nil && !target.IsDefault {
+				buttons += " [d Delete]"
+			}
+			return buttons + " [Esc Back] · Tab/1/2/3/4 sections · j/k select · r refresh"
+		}
 		if rt.configuration.section == 0 {
 			return rt.pinButton("single") + " " + rt.pinButton("tree") + " [i ID] [Esc Back] · CONFIGURATION · Tab sections · s sync · r refresh"
 		}
 		if rt.size.cols < 55 {
 			return "[a] [d] [Esc] · CONFIGURATION · Tab sections · s sync"
 		}
-		return "[a Add] [d Remove] [Esc Back] · CONFIGURATION · Tab/1/2/3 sections · j/k select · s sync · r refresh · q close"
+		return "[a Add] [d Remove] [Esc Back] · CONFIGURATION · Tab/1/2/3/4 sections · j/k select · s sync · r refresh · q close"
 	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
 	if rt.mode == "bench" && !rt.reconnectRequired && !rt.showBrowserHelp {
@@ -391,8 +433,9 @@ func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
 		"Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.",
 		"p toggles the selected item's explicit Single pin; Shift+P toggles its explicit Subtree pin. Both can coexist. Each gesture changes only that kind; other pins, inherited membership, query rules and protected work remain. Inherited-only rows gain their own pin; ancestor pins are never removed. Seeds must be published first.",
 		"The footer shows Pin/Unpin for each kind from native cached explicit pins. Click those named controls for the same action as p/Shift+P. A busy pin action cannot be repeated; native origin, Bench and settings guards refuse stale captures. Membership refreshes from native truth afterward.",
-		"b opens Bench Configuration with Pins / Areas / Sprints. Tab or 1/2/3 chooses a section. Pins uses the same p/Shift+P toggles, including uncached IDs. Areas/Sprints use a add and d remove with review; p/P never pin those entries. Esc returns to the same viewer, selection, folds and viewport.",
+		"b opens Bench Configuration with Pins / Areas / Sprints / Benches. Tab or 1/2/3/4 chooses a section. Pins uses the same p/Shift+P toggles, including uncached IDs. Areas/Sprints use a add and d remove with review; p/P never pin those entries. Esc returns to the same viewer, selection, folds and viewport.",
 		"Manual IDs exist only in b Bench configuration > Pins > i. Enter validates a positive ID and opens review; p adds Single pin, Shift+P adds Subtree pin immediately. Enter adds the chosen kind. These are add intents, not toggles. Unknown IDs stay uncached/unverified until scoped sync. Text-entry q/c/p/P are text; Esc cancels input first.",
+		"Benches uses arrows/j/k to choose, Enter to select, n to create an empty named Bench, and d/Delete to review deletion. Names retain spaces and Unicode. Every deletion, even an empty Bench, shows its exact name, saved pins and queries, then Yes/Cancel. Default is protected. Staged work survives; deleting the current Bench falls back to default. A stale target or contents digest requires a fresh list and new confirmation; nothing is retried silently. Click the named controls for the same actions. Switching resets old item selection, folds and viewport while keeping configuration open.",
 		"s syncs only this Bench; r refreshes cached membership. 3 opens Review; review never pins or applies. Ctrl+R reconnects after an origin change. Ctrl+C always quits.",
 	}
 	rt.drawOverlay(out, cols, visible, lines, []struct{ text, action string }{{"[Close help]", "cancel"}})

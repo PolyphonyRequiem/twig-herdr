@@ -72,6 +72,8 @@ type runtime struct {
 	pinAction       *pinAction
 	configuration   *configurationView
 	form            *configurationForm
+	management      managementState
+	benchOperation  *benchOperation
 	mutationLabel   string
 	showBrowserHelp bool
 	overlayOffset   int
@@ -154,6 +156,8 @@ const (
 	evMouse
 	evBrowserLoaded
 	evPinDone
+	evManagementLoaded
+	evBenchOperationDone
 )
 
 type event struct {
@@ -164,6 +168,7 @@ type event struct {
 	mouse      uv.Mouse
 	browser    *BrowserSnapshot
 	syncResult *benchSyncResult
+	management *benchManagement
 
 	size size
 
@@ -268,6 +273,10 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleBrowserLoaded(ev)
 			case evPinDone:
 				rt.handlePinDone(ev)
+			case evManagementLoaded:
+				rt.handleManagementLoaded(ev)
+			case evBenchOperationDone:
+				rt.handleBenchOperationDone(ev)
 			case evResize:
 				rt.handleResize(ev.size)
 			case evBenchTick:

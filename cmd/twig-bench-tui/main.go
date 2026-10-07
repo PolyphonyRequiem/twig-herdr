@@ -21,7 +21,8 @@ Requires twig on PATH; does not require Herdr or any Herdr environment variables
 Semantic Bench reads, pins, configuration and scoped sync prefer twig-bench-native.exe
 beside this browser (twig-bench-native on Unix); otherwise Twig must support browser
 v1/configuration v1 JSON, --include-browser, --expect-bench, --expect-binding,
---expect-identity, --expect-settings, and workspace untrack ID --mode single|tree.
+--expect-identity, --expect-settings, --expect-contents, bench list --include-management
+v1, and workspace untrack ID --mode single|tree.
 Normal Twig remains connection-status and proposal-review authority.
 --file opens a specific proposal; otherwise Review finds the latest unresolved proposal.
 Relative proposal paths resolve against --cwd (the current directory by default).
@@ -30,8 +31,12 @@ Keys:
   1 workspace table, 2 bench tree, 3 proposal review
   j/k or up/down select work items locally (not twig set), PgUp/PgDn/Home/End navigate
   left/right collapse/expand, Space toggle; click rows/disclosures; wheel scrolls
-  b Bench Configuration (Pins / Areas / Sprints); Esc returns to the same viewer
-  Tab or 1/2/3 sections; Areas/Sprints use a add, d remove; Enter reviews/confirms
+  b Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer
+  Tab or 1/2/3/4 sections; Areas/Sprints use a add, d remove; Enter reviews/confirms
+  Benches: arrows/j/k choose, Enter selects, n creates empty, d/Delete reviews deletion
+  Yes/Cancel shows exact saved pins/queries; Default is protected; staged work survives
+  Current deletion selects default. Stale contents require a fresh list/reconfirmation.
+  Mouse controls match keys; selecting resets item selection/folds/scroll, stays in b.
   p toggles only explicit Single pin; Shift+P only Subtree pin, in viewer or Pins
   Both coexist; each removal retains other pin kinds and inherited/query membership
   Manual IDs only in b Bench Configuration > Pins > i, including an empty Bench

@@ -54,6 +54,7 @@ func (rt *runtime) beginSync() {
 		rt.draw()
 		return
 	}
+	rt.cancelManagement()
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("bench refresh superseded by sync"))
 	rt.syncGen++
@@ -134,5 +135,6 @@ func (rt *runtime) handleSyncDone(ev event) {
 	}
 	rt.setNotice(ev.syncResult.notice(), 0)
 	rt.beginBenchRefresh(nil, true)
+	rt.beginManagementRefresh()
 	rt.draw()
 }

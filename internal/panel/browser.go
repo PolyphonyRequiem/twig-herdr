@@ -247,10 +247,15 @@ func (rt *runtime) handleBrowserLoaded(ev event) {
 	rt.browser.replace(ev.browser)
 	rt.benchSummary = ev.browser.BenchName
 	if rt.configuration != nil && rt.configuration.benchID != ev.browser.BenchID {
-		rt.leaveConfiguration()
-		rt.setNotice("Bench changed; configuration closed without retargeting.", 0)
+		if rt.configuration.section == 3 || rt.configuration.benchID == "" {
+			rt.configuration.benchID = ev.browser.BenchID
+			rt.configuration.selected[0], rt.configuration.selected[1], rt.configuration.selected[2] = 0, 0, 0
+		} else {
+			rt.leaveConfiguration()
+			rt.setNotice("Bench changed; configuration closed without retargeting.", 0)
+		}
 	}
-	if rt.form != nil && rt.form.benchID != ev.browser.BenchID {
+	if rt.form != nil && rt.form.kind != "bench" && rt.form.benchID != ev.browser.BenchID {
 		rt.form = nil
 		rt.setNotice("Bench changed; captured input canceled.", 0)
 	}
@@ -738,6 +743,7 @@ func (rt *runtime) beginPinMutation(p pinAction) {
 		return
 	}
 	rt.form = nil
+	rt.cancelManagement()
 	rt.cancelQueuedViews()
 	rt.cancelReviewLookup(errors.New("Review superseded by pin change"))
 	rt.bench.launchGen++
@@ -793,6 +799,7 @@ func (rt *runtime) handlePinDone(ev event) {
 	// A refusal can mean the captured Bench or settings changed before admission.
 	// Fetch native truth on either outcome without retargeting the mutation.
 	rt.beginBenchRefresh(nil, true)
+	rt.beginManagementRefresh()
 	rt.draw()
 }
 
@@ -803,6 +810,9 @@ func (rt *runtime) cancelPins() {
 		rt.pinCancel = nil
 	}
 	rt.pinAction = nil
+	rt.benchOperation = nil
+	rt.management.snapshot = nil
+	rt.management.error = ""
 	rt.leaveConfiguration()
 }
 

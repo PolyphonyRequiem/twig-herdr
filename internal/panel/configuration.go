@@ -85,7 +85,7 @@ func (rt *runtime) matchesCapture(benchID string, binding HostBinding, digest st
 type configurationView struct {
 	benchID   string
 	section   int
-	selected  [3]int
+	selected  [4]int
 	offset    int
 	maxOffset int
 }
@@ -189,7 +189,7 @@ func positiveID(value string) (int, error) {
 }
 
 type configurationForm struct {
-	kind           string // pin, area, sprint
+	kind           string // pin, area, sprint, bench
 	remove         bool
 	editor         textEditor
 	confirm        bool
@@ -198,10 +198,12 @@ type configurationForm struct {
 	benchName      string
 	binding        HostBinding
 	settingsDigest string
+	target         managedBench
 	error          string
 }
 
 func (rt *runtime) leaveConfiguration() {
+	rt.cancelManagement()
 	rt.configuration, rt.form = nil, nil
 	rt.showBrowserHelp = false
 	rt.overlayOffset = 0
@@ -233,6 +235,15 @@ func (rt *runtime) openInput(kind, value string) {
 	if rt.mode != "bench" || rt.reconnectRequired || rt.pinCancel != nil {
 		return
 	}
+	if kind == "bench" {
+		if rt.configuration == nil || rt.configuration.section != 3 {
+			return
+		}
+		rt.form = &configurationForm{kind: kind, editor: newTextEditor(value), binding: rt.binding}
+		rt.overlayOffset = 0
+		rt.draw()
+		return
+	}
 	if kind == "pin" && (rt.configuration == nil || rt.configuration.section != 0) {
 		return
 	}
@@ -256,6 +267,12 @@ func (rt *runtime) openInput(kind, value string) {
 }
 
 func (rt *runtime) configurationCount() int {
+	if rt.configuration != nil && rt.configuration.section == 3 {
+		if rt.management.snapshot != nil {
+			return len(rt.management.snapshot.Benches)
+		}
+		return 0
+	}
 	if rt.configuration == nil || rt.browser.snapshot == nil || rt.browser.snapshot.Configuration == nil {
 		return 0
 	}
@@ -274,13 +291,20 @@ func (rt *runtime) chooseSection(section int) {
 	if rt.configuration == nil {
 		return
 	}
-	rt.configuration.section, rt.configuration.offset = (section+3)%3, 0
+	rt.configuration.section, rt.configuration.offset = (section+4)%4, 0
+	if rt.configuration.section == 3 {
+		rt.beginManagementRefresh()
+	}
 	rt.draw()
 }
 
 func (rt *runtime) removeConfigurationSelection() {
 	view := rt.configuration
 	if view == nil || rt.configurationCount() == 0 || rt.pinCancel != nil {
+		return
+	}
+	if view.section == 3 {
+		rt.openBenchDelete()
 		return
 	}
 	c := rt.browser.snapshot.Configuration
@@ -315,6 +339,8 @@ func (rt *runtime) addConfigurationSelection() {
 		rt.openInput("area", "")
 	case 2:
 		rt.openInput("sprint", "")
+	case 3:
+		rt.openInput("bench", "")
 	}
 }
 
@@ -332,8 +358,8 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 	case key.MatchString("tab", "right"):
 		rt.chooseSection(c.section + 1)
 	case key.MatchString("shift+tab", "left"):
-		rt.chooseSection(c.section + 2)
-	case key.MatchString("1", "2", "3"):
+		rt.chooseSection(c.section + 3)
+	case key.MatchString("1", "2", "3", "4"):
 		section := 0
 		if key.MatchString("2") {
 			section = 1
@@ -341,13 +367,24 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 		if key.MatchString("3") {
 			section = 2
 		}
+		if key.MatchString("4") {
+			section = 3
+		}
 		rt.chooseSection(section)
 	case key.MatchString("P", "shift+p"):
 		rt.toggleSelectedPin("tree")
 	case key.MatchString("p"):
 		rt.toggleSelectedPin("single")
-	case key.MatchString("a", "enter"):
-		rt.addConfigurationSelection()
+	case key.MatchString("enter"):
+		if c.section == 3 {
+			rt.selectManagedBench()
+		} else {
+			rt.addConfigurationSelection()
+		}
+	case key.MatchString("a", "n"):
+		if !key.MatchString("n") || c.section == 3 {
+			rt.addConfigurationSelection()
+		}
 	case key.MatchString("i"):
 		if c.section == 0 {
 			rt.openInput("pin", "")
@@ -358,6 +395,9 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 		rt.beginSync()
 	case key.MatchString("r"):
 		rt.beginBenchRefresh(nil, true)
+		if c.section == 3 {
+			rt.beginManagementRefresh()
+		}
 	case key.MatchString("j", "down", "k", "up", "home", "end"):
 		i := c.selected[c.section]
 		switch {
@@ -391,6 +431,15 @@ func (rt *runtime) handleFormKey(key uv.KeyPressEvent) {
 	if key.MatchString("esc") {
 		rt.form = nil
 		rt.draw()
+		return
+	}
+	if f.kind == "bench" {
+		if f.remove && key.MatchString("c", "n") {
+			rt.form = nil
+			rt.draw()
+			return
+		}
+		rt.handleBenchFormKey(key)
 		return
 	}
 	if f.confirm && rt.scrollOverlayKey(key) {
@@ -495,6 +544,7 @@ func (rt *runtime) beginConfigurationMutation() {
 	}
 	args = semanticArgs(append(args, "--expect-bench", f.benchID, "--expect-settings", f.settingsDigest, "-o", "json"), f.binding)
 	rt.form = nil
+	rt.cancelManagement()
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("Bench configuration change superseded refresh"))
 	rt.pinGen++
@@ -571,9 +621,13 @@ func pinDescription(pin BenchPin) string {
 }
 
 func (rt *runtime) configurationLines(cols int) []configurationLine {
-	c, view := rt.browser.snapshot.Configuration, rt.configuration
+	view := rt.configuration
+	c := &BenchConfiguration{}
+	if rt.browser.snapshot != nil && rt.browser.snapshot.Configuration != nil {
+		c = rt.browser.snapshot.Configuration
+	}
 	var logical []configurationLine
-	for i, label := range []string{"[1 Pins]", "[2 Areas]", "[3 Sprints]"} {
+	for i, label := range []string{"[1 Pins]", "[2 Areas]", "[3 Sprints]", "[4 Benches]"} {
 		prefix := "  "
 		if i == view.section {
 			prefix = "› "
@@ -583,6 +637,14 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 	status := "Automatic off (no sprints) · Ownership: " + safe(c.AssigneeSummary)
 	if c.AutomaticEnabled {
 		status = "Automatic ownership: " + safe(c.AssigneeSummary)
+	}
+	if view.section == 3 {
+		status = "Named local benches · create empty, then select explicitly"
+		if rt.management.cancel != nil {
+			status = "Loading native benches…"
+		} else if rt.management.error != "" {
+			status = "Refused: " + safe(rt.management.error) + " · r retries the list only"
+		}
 	}
 	logical = append(logical, configurationLine{text: status, row: -1})
 	count := rt.configurationCount()
@@ -600,6 +662,15 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 			label = scope + " · " + safe(c.Areas[i].Path)
 		case 2:
 			label = safe(c.Sprints[i].Expression)
+		case 3:
+			bench := rt.management.snapshot.Benches[i]
+			label = safe(bench.Name)
+			if bench.IsCurrent {
+				label += " · current"
+			}
+			if bench.IsDefault {
+				label += " · default (protected)"
+			}
 		}
 		prefix := "  "
 		if i == view.selected[view.section] {
@@ -608,7 +679,11 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 		logical = append(logical, configurationLine{text: prefix + label, action: "entry", row: i})
 	}
 	if count == 0 {
-		logical = append(logical, configurationLine{text: "No saved selectors in this section. Add one below.", row: -1})
+		message := "No saved selectors in this section. Add one below."
+		if view.section == 3 {
+			message = "No admitted Bench list. r refreshes; n creates an empty Bench."
+		}
+		logical = append(logical, configurationLine{text: message, row: -1})
 	}
 	if view.section == 0 {
 		if node := rt.selectedPinNode(); node != nil {
@@ -617,6 +692,14 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 			}
 		}
 		logical = append(logical, configurationLine{text: "[i Enter any ID]", action: "manual-id", row: -1})
+	} else if view.section == 3 {
+		logical = append(logical, configurationLine{text: "[n Create empty Bench]", action: "add", row: -1})
+		if selected := rt.selectedManagedBench(); selected != nil {
+			logical = append(logical, configurationLine{text: "[Enter Select Bench]", action: "bench-select", row: -1})
+			if !selected.IsDefault {
+				logical = append(logical, configurationLine{text: "[d Delete selected Bench…]", action: "remove", row: -1})
+			}
+		}
 	} else {
 		logical = append(logical, configurationLine{text: "[a Add]", action: "add", row: -1})
 		if count > 0 {
@@ -627,6 +710,8 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 		logical = append(logical, configurationLine{text: "Areas OR together, then AND chosen sprints. No areas means no area restriction; it does not enable automatic membership.", row: -1})
 	} else if view.section == 2 {
 		logical = append(logical, configurationLine{text: "Sprints OR together: @Current, @Current+1, @Current-1, or absolute iteration paths. Saved rules drive cached reads and scoped sync.", row: -1})
+	} else if view.section == 3 {
+		logical = append(logical, configurationLine{text: "↑/↓ or j/k choose · Enter selects · n creates · d/Delete reviews deletion. Default cannot be deleted. Deletion preserves staged work; deleting the current Bench selects default.", row: -1})
 	} else {
 		logical = append(logical, configurationLine{text: "p toggles only Single pin; Shift+P only Subtree pin. Both can coexist. Other pin kinds, inherited membership, automatic rules and protected work remain. Uncached IDs stay unverified until scoped sync.", row: -1})
 	}
@@ -719,6 +804,10 @@ func (rt *runtime) drawConfigurationLines(out *strings.Builder, cols, visible in
 
 func (rt *runtime) drawConfigurationForm(out *strings.Builder, cols, visible int) {
 	f := rt.form
+	if f.kind == "bench" {
+		rt.drawBenchForm(out, cols, visible)
+		return
+	}
 	verb := "Add"
 	if f.remove {
 		verb = "Remove"
@@ -781,11 +870,15 @@ func (rt *runtime) drawConfigurationForm(out *strings.Builder, cols, visible int
 		lines = append(lines, configurationLine{text: "Refused: " + safe(f.error), row: -1})
 	}
 	lines = append(lines, configurationLine{text: "[Esc Cancel]", action: "cancel", row: -1})
+	rt.drawFormLines(out, cols, visible, lines)
+}
+
+func (rt *runtime) drawFormLines(out *strings.Builder, cols, visible int, lines []configurationLine) {
 	physical := wrapConfigurationLines(lines, cols)
 	rt.overlayMax = max(len(physical)-visible, 0)
 	rt.overlayOffset = max(0, min(rt.overlayOffset, rt.overlayMax))
-	// Keep the edited cursor visible even when an entered path wraps deeply.
-	if !f.confirm {
+	// Keep the edited cursor visible even when entered text wraps deeply.
+	if !rt.form.confirm {
 		for i, line := range physical {
 			if line.action == "field" && line.cursorOffset >= 0 {
 				if i < rt.overlayOffset {
@@ -830,7 +923,9 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 					rt.draw()
 				}
 			case "config-confirm":
-				if rt.form.confirm {
+				if rt.form.kind == "bench" {
+					rt.handleBenchConfirmMouse()
+				} else if rt.form.confirm {
 					rt.beginConfigurationMutation()
 				} else {
 					rt.handleFormKey(uv.KeyPressEvent{Code: uv.KeyEnter})
@@ -856,6 +951,8 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 			case "config-entry":
 				rt.configuration.selected[rt.configuration.section] = hit.row
 				rt.draw()
+			case "config-bench-select":
+				rt.selectManagedBench()
 			case "config-add":
 				rt.addConfigurationSelection()
 			case "config-manual-id":
