@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,8 +98,9 @@ type session struct {
 	gen  uint64
 	kind string
 
-	view string
-	file string
+	view         string
+	file         string
+	benchSummary string
 
 	cols int
 	rows int
@@ -115,10 +117,12 @@ type session struct {
 	hasData bool
 	exited  bool
 
-	promptTail       string
-	density          string
-	reviewEcho       byte
-	reviewEchoBuffer []byte
+	promptTail          string
+	density             string
+	reviewEcho          byte
+	reviewEchoBuffer    []byte
+	standaloneBuffer    []byte
+	observationAdmitted bool
 
 	pendingDensity    string
 	pendingResize     size
@@ -262,12 +266,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 			case evSignal:
 				rt.shutdown()
 			case evSessionStarted:
-				if rt.cfg.Standalone {
-					rt.admissionActions = append(rt.admissionActions, ev)
-					rt.checkAdmission(nil, false)
-				} else {
-					rt.handleSessionStarted(ev.session, ev.summary)
-				}
+				rt.handleSessionStarted(ev.session, ev.summary)
 			case evSessionData:
 				rt.handleSessionData(ev.session, ev.data)
 			case evSessionExit:
@@ -465,6 +464,11 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 	}
 	if rt.reconnectRequired {
 		rt.draw()
+		return
+	}
+	if rt.cfg.Standalone && (key.MatchString("j", "k", "up", "down", "pgup", "pgdown", "home", "end") ||
+		(rt.mode == "review" && key.MatchString("d", "b", "r"))) {
+		rt.handleAdmittedKey(key)
 		return
 	}
 	rt.admissionActions = append(rt.admissionActions, event{kind: evKey, key: key})
@@ -962,7 +966,9 @@ func (rt *runtime) handleSessionStarted(sess *session, summary string) {
 		rt.bench.pending = sess
 		close(sess.started)
 		rt.bench.launchCancel = nil
-		if summary != "" {
+		if rt.cfg.Standalone {
+			sess.benchSummary = summary
+		} else if summary != "" {
 			rt.benchSummary = summary
 		}
 		rt.draw()
@@ -1008,7 +1014,22 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 	if sess.term == nil {
 		return
 	}
-	if sess.kind == "review" || rt.cfg.Standalone {
+	if rt.cfg.Standalone {
+		if sess.kind == "bench" || sess.observationAdmitted {
+			// Bench output stays in the hidden pending VT until the post-exit
+			// status check. Review density changes reuse an admitted observation.
+			rt.handleAdmittedSessionData(sess, data)
+			return
+		}
+		start := max(0, len(sess.standaloneBuffer)-len(reviewPrompt)+1)
+		sess.standaloneBuffer = append(sess.standaloneBuffer, data...)
+		if !bytes.Contains(sess.standaloneBuffer[start:], []byte(reviewPrompt)) {
+			return
+		}
+		data = sess.standaloneBuffer
+		sess.standaloneBuffer = nil
+	}
+	if sess.kind == "review" {
 		// Interactive review never exits while idle. Its assembled model can
 		// arrive after rebinding, so qualify bytes before VT, prompt readiness,
 		// reply publication or any deferred redraw action can consume them.
@@ -1038,6 +1059,7 @@ func (rt *runtime) handleAdmittedSessionData(sess *session, data []byte) {
 		}
 		if !sess.ready && strings.Contains(sess.promptTail, reviewPrompt) {
 			sess.ready = true
+			sess.observationAdmitted = true
 			sess.promptTail = ""
 			rt.applyReviewPending(sess)
 			if sess.ready && rt.review.pendingReply != nil {
@@ -1073,6 +1095,9 @@ func (rt *runtime) handleSessionExit(sess *session, err, admissionErr error) {
 		}
 		rt.bench.active = sess
 		rt.bench.pending = nil
+		if rt.cfg.Standalone && sess.benchSummary != "" {
+			rt.benchSummary = sess.benchSummary
+		}
 		if err != nil {
 			rt.setError(fmt.Sprintf("Twig workspace exited with code %s", exitReason(err)))
 		} else if strings.HasPrefix(rt.notice, "Twig bench refresh failed") || strings.HasPrefix(rt.notice, "Twig workspace exited") {

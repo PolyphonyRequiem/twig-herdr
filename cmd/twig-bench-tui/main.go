@@ -26,8 +26,10 @@ Keys:
   j/k/arrows scroll, PgUp/PgDn/Home/End navigate, r refresh
   d details, b brief, Esc/c leave review, Ctrl+R reconnect, q/Ctrl+C quit
 
-Proposal review never authorizes or applies changes. Connection status is checked
-before display and actions; standalone mode does not provide atomic host snapshots.
+Proposal review never authorizes or applies changes. Fresh observations and native
+operations are connection-checked; local navigation uses retained snapshots.
+Periodic checks clear retained data after connection changes. Standalone status
+checks do not provide atomic host-snapshot admission.
 
 Build: go build -trimpath -o bin/twig-bench-tui.exe ./cmd/twig-bench-tui
 `

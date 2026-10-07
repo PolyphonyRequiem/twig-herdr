@@ -44,7 +44,7 @@ func (rt *runtime) draw() {
 	if rt.closing {
 		return
 	}
-	if len(rt.admissionActions) != 0 {
+	if !rt.cfg.Standalone && len(rt.admissionActions) != 0 {
 		// A queued first action cannot expose another old frame while its native
 		// origin check is outstanding. Refusal clears this queue before redraw.
 		return

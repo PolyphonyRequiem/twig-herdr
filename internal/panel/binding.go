@@ -183,6 +183,8 @@ func (rt *runtime) stopForReconnect(err error) {
 			sess.ready = false
 			sess.promptTail = ""
 			sess.reviewEchoBuffer = nil
+			sess.standaloneBuffer = nil
+			sess.observationAdmitted = false
 		}
 	}
 	rt.cancelReviewLookup(err)
@@ -265,8 +267,6 @@ func (rt *runtime) handleAdmissionResolved(ev event) {
 			switch action.kind {
 			case evBenchTick:
 				rt.beginBenchRefresh(nil, false)
-			case evSessionStarted:
-				rt.handleSessionStarted(action.session, action.summary)
 			case evKey:
 				rt.handleAdmittedKey(action.key)
 			case evResize:
