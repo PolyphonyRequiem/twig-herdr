@@ -246,20 +246,28 @@ func captureStdout(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer r.Close()
+	defer w.Close()
+	type captureResult struct {
+		data []byte
+		err  error
+	}
+	result := make(chan captureResult, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		result <- captureResult{data: data, err: err}
+	}()
 	os.Stdout = w
 	defer func() { os.Stdout = old }()
 	fn()
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
+	captured := <-result
+	if captured.err != nil {
+		t.Fatal(captured.err)
 	}
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
+	return string(captured.data)
 }
 
 func rowMarker(row int) string {

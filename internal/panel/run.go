@@ -70,6 +70,9 @@ type runtime struct {
 	nativePath      string
 	browser         browserModel
 	picker          *pinPicker
+	configuration   *configurationView
+	form            *configurationForm
+	mutationLabel   string
 	showBrowserHelp bool
 	overlayOffset   int
 	overlayMax      int
@@ -435,6 +438,9 @@ func (rt *runtime) handleRequest(req Request) {
 }
 
 func (rt *runtime) handleAdmittedRequest(req Request) {
+	if req.Command == "view" || req.Command == "review" || req.Command == "exit-review" {
+		rt.leaveConfiguration()
+	}
 	switch req.Command {
 	case "ping", "status":
 		rt.reply(req.Reply, Result{Snapshot: rt.snapshot()})
@@ -491,6 +497,14 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 		}
 		return
 	}
+	if rt.mode == "bench" && rt.form != nil {
+		rt.handleFormKey(key)
+		return
+	}
+	if rt.mode == "bench" && rt.configuration != nil && rt.picker == nil {
+		rt.handleConfigurationKey(key)
+		return
+	}
 	if rt.mode == "bench" && rt.handleBrowserKey(key) {
 		return
 	}
@@ -510,6 +524,11 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 
 func (rt *runtime) handleAdmittedKey(key uv.KeyPressEvent) {
 
+	// Admission may complete after a local editor opens. Queued viewer keys
+	// cannot become editor commands or apply anything in the new state.
+	if rt.configuration != nil || rt.form != nil {
+		return
+	}
 	if key.MatchString("s") {
 		rt.beginSync()
 		return
@@ -829,8 +848,7 @@ func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing
 		return
 	}
 
-	rt.picker = nil
-	rt.showBrowserHelp = false
+	rt.leaveConfiguration()
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("review opened"))
 	rt.cancelReviewLaunch(errors.New("review reopened"))
@@ -1339,12 +1357,13 @@ func (rt *runtime) snapshot() Snapshot {
 		ready = rt.browser.snapshot != nil
 	}
 	return Snapshot{
-		Mode:       rt.mode,
-		View:       rt.benchView,
-		ReviewFile: rt.reviewFile,
-		Ready:      ready,
-		BindingID:  rt.binding.BindingID,
-		IdentityID: rt.binding.IdentityID,
+		Mode:        rt.mode,
+		View:        rt.benchView,
+		Configuring: rt.configuration != nil || rt.form != nil,
+		ReviewFile:  rt.reviewFile,
+		Ready:       ready,
+		BindingID:   rt.binding.BindingID,
+		IdentityID:  rt.binding.IdentityID,
 	}
 }
 

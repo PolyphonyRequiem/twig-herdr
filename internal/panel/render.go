@@ -61,10 +61,11 @@ func (rt *runtime) draw() {
 		out.WriteString("\x1b[3J")
 	}
 	out.WriteString("\x1b[1;1H\x1b[2K")
-	drawBar(&out, rt.headerText(), cols, "\x1b[48;2;22;40;59m\x1b[38;2;177;217;239m")
+	barStyle, dividerStyle, footerStyle := rt.chromeStyles()
+	drawBar(&out, rt.headerText(), cols, barStyle)
 	if rows >= 3 {
 		out.WriteString("\x1b[2;1H\x1b[2K")
-		drawDivider(&out, cols, "\x1b[48;2;22;40;59m\x1b[38;2;57;84;106m")
+		drawDivider(&out, cols, dividerStyle)
 	}
 	truncated := false
 	if rt.mode == "review" && !rt.reconnectRequired {
@@ -87,10 +88,14 @@ func (rt *runtime) draw() {
 		}
 	} else {
 		rt.browser.ensureLayout(rt.benchView, cols)
-		if rt.picker != nil {
+		if rt.form != nil {
+			rt.drawConfigurationForm(&out, cols, contentRows)
+		} else if rt.picker != nil {
 			rt.drawPicker(&out, cols, contentRows)
 		} else if rt.showBrowserHelp {
 			rt.drawBrowserHelp(&out, cols, contentRows)
+		} else if rt.configuration != nil {
+			rt.drawConfiguration(&out, cols, contentRows)
 		} else {
 			rt.drawBrowserRows(&out, cols, contentRows)
 		}
@@ -100,47 +105,19 @@ func (rt *runtime) draw() {
 		if rt.notice != "" {
 			drawBar(&out, safe(rt.notice), cols, "\x1b[48;2;27;37;52m\x1b[38;2;255;190;105m")
 		} else {
-			drawDivider(&out, cols, "\x1b[48;2;27;37;52m\x1b[38;2;57;84;106m")
+			drawDivider(&out, cols, dividerStyle)
 		}
 	}
 	if rows >= 2 {
 		fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", rows)
-		drawBar(&out, rt.footerText(truncated), cols, "\x1b[48;2;27;37;52m\x1b[38;2;152;175;195m")
-		if rt.mode != "review" && !rt.reconnectRequired && rt.picker == nil && !rt.showBrowserHelp {
-			for _, button := range []struct{ text, action string }{{"[p Pin]", "pin"}, {"[P Unpin]", "unpin"}, {"[? Help]", "help"}} {
-				if cols < 40 {
-					if button.action == "pin" {
-						button.text = "[p]"
-					} else if button.action == "unpin" {
-						button.text = "[P]"
-					} else {
-						button.text = "[?]"
-					}
-				}
-				plain := ansi.Strip(rt.footerText(truncated))
-				if index := strings.Index(plain, button.text); index >= 0 {
-					x := ansi.StringWidth(plain[:index])
-					end := x + ansi.StringWidth(button.text)
-					if end <= cols {
-						rt.hits = append(rt.hits, hitTarget{x1: x, x2: end, y: rows - 1, action: button.action})
-					}
-				}
-			}
-		}
-		if rt.mode == "bench" && !rt.reconnectRequired && (rt.picker != nil || rt.showBrowserHelp) {
-			plain := ansi.Strip(rt.footerText(truncated))
-			for _, button := range []struct{ text, action string }{{"[OK]", "confirm"}, {"[Cancel]", "cancel"}, {"[Close]", "cancel"}} {
-				if index := strings.Index(plain, button.text); index >= 0 {
-					x := ansi.StringWidth(plain[:index])
-					end := x + ansi.StringWidth(button.text)
-					if end <= cols {
-						rt.hits = append(rt.hits, hitTarget{x1: x, x2: end, y: rows - 1, action: button.action})
-					}
-				}
-			}
-		}
+		drawBar(&out, rt.footerText(truncated), cols, footerStyle)
+		rt.addFooterHits(cols, rows-1, truncated)
 	}
 	out.WriteString("\x1b[0m\x1b[?25l")
+	if colorDisabled() {
+		_, _ = os.Stdout.WriteString(labelSGR.ReplaceAllString(out.String(), ""))
+		return
+	}
 	_, _ = os.Stdout.WriteString(out.String())
 }
 
@@ -167,13 +144,70 @@ func drawDivider(out *strings.Builder, width int, style string) {
 	out.WriteString("\x1b[0m")
 }
 
+func colorDisabled() bool {
+	_, noColor := os.LookupEnv("NO_COLOR")
+	return noColor || os.Getenv("TERM") == "dumb"
+}
+
+func (rt *runtime) chromeStyles() (string, string, string) {
+	if rt.configuration != nil || rt.form != nil {
+		// Fixed foreground/background pairs remain readable in light and dark
+		// terminal themes; the text label also distinguishes monochrome mode.
+		return "\x1b[48;2;57;35;65m\x1b[38;2;245;227;248m", "\x1b[48;2;57;35;65m\x1b[38;2;229;163;222m", "\x1b[48;2;57;35;65m\x1b[38;2;245;227;248m"
+	}
+	return "\x1b[48;2;22;40;59m\x1b[38;2;177;217;239m", "\x1b[48;2;22;40;59m\x1b[38;2;57;84;106m", "\x1b[48;2;27;37;52m\x1b[38;2;152;175;195m"
+}
+
+func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
+	if rt.mode != "bench" || rt.reconnectRequired {
+		return
+	}
+	type button struct{ text, action string }
+	var buttons []button
+	switch {
+	case rt.form != nil:
+		buttons = []button{{"[OK]", "config-confirm"}, {"[Cancel]", "config-cancel"}}
+	case rt.picker != nil || rt.showBrowserHelp:
+		buttons = []button{{"[OK]", "confirm"}, {"[Cancel]", "cancel"}, {"[Close]", "cancel"}, {"[i ID]", "manual-id"}}
+	case rt.configuration != nil:
+		buttons = []button{{"[a Add]", "config-add"}, {"[d Remove]", "config-remove"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
+		if cols < 55 {
+			buttons = []button{{"[a]", "config-add"}, {"[d]", "config-remove"}, {"[i]", "config-manual-id"}, {"[Esc]", "config-back"}}
+		}
+	default:
+		buttons = []button{{"[b Bench]", "configure"}, {"[p Pin]", "pin"}, {"[i ID]", "manual-id"}, {"[P Unpin]", "unpin"}, {"[? Help]", "help"}}
+		if cols < 55 {
+			buttons = []button{{"[b]", "configure"}, {"[p]", "pin"}, {"[i]", "manual-id"}, {"[P]", "unpin"}, {"[?]", "help"}}
+		}
+	}
+	plain := ansi.Strip(rt.footerText(truncated))
+	for _, button := range buttons {
+		index := strings.Index(plain, button.text)
+		if index < 0 {
+			continue
+		}
+		x := ansi.StringWidth(plain[:index])
+		end := x + ansi.StringWidth(button.text)
+		if end <= cols {
+			rt.hits = append(rt.hits, hitTarget{x1: x, x2: end, y: y, action: button.action})
+		}
+	}
+}
+
 func (rt *runtime) headerText() string {
+	if rt.form != nil {
+		return fmt.Sprintf("Bench Configuration · %s · Bench: %s", strings.Title(rt.form.kind), safe(rt.form.benchName))
+	}
 	if rt.picker != nil {
 		verb := "Pin"
 		if rt.picker.remove {
 			verb = "Unpin"
 		}
-		return fmt.Sprintf("%s #%d · %s · Bench: %s", verb, rt.picker.node.ID, safe(rt.picker.node.Title), safe(rt.picker.benchID))
+		prefix := ""
+		if rt.configuration != nil {
+			prefix = "Bench Configuration · "
+		}
+		return fmt.Sprintf("%s%s #%d · %s · Bench: %s", prefix, verb, rt.picker.node.ID, safe(rt.picker.node.Title), safe(rt.picker.benchID))
 	}
 	bench := rt.benchSummary
 	if bench == "" {
@@ -182,6 +216,9 @@ func (rt *runtime) headerText() string {
 	view := "Table"
 	if rt.benchView == "tree" {
 		view = "Tree"
+	}
+	if rt.configuration != nil {
+		view = "Bench Configuration"
 	}
 	if rt.mode == "review" {
 		view = "Review (snapshot)"
@@ -206,18 +243,21 @@ func (rt *runtime) footerText(truncated bool) string {
 		bits = append(bits, "\x1b[38;2;255;190;105m"+safe(rt.notice)+"\x1b[38;2;152;175;195m")
 	}
 	mode := rt.benchView
-	buttons := "[p Pin] [P Unpin] [? Help]"
-	if rt.size.cols < 40 {
-		buttons = "[p] [P] [?]"
+	buttons := "[b Bench] [p Pin] [i ID] [P Unpin] [? Help]"
+	if rt.size.cols < 55 {
+		buttons = "[b] [p] [i] [P] [?]"
 	}
 	help := buttons + " · 1 table · 2 tree · 3 review · s sync · r refresh · j/k select · ←/→/Space fold · wheel scroll · q close"
 	if rt.mode == "review" {
 		mode = "review"
-		help = "d details · b back · s sync · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close"
+		help = "d details · b brief · s sync · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close"
 	}
 	if rt.reconnectRequired {
 		mode = "reconnect-required"
 		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
+	}
+	if rt.form != nil {
+		return "[OK] [Cancel] · Enter review/confirm · Esc cancel · Ctrl+C quit"
 	}
 	if rt.picker != nil {
 		if rt.syncCancel != nil {
@@ -226,10 +266,20 @@ func (rt *runtime) footerText(truncated bool) string {
 		if rt.picker.explanation != "" {
 			return "[Close] · Enter/Esc close · wheel/PgUp/PgDn scroll"
 		}
-		return "[OK] [Cancel] · Enter confirm · ↑/↓ choose · Esc cancel · wheel/PgUp/PgDn scroll"
+		idButton := " [i ID]"
+		if rt.picker.remove {
+			idButton = ""
+		}
+		return "[OK] [Cancel]" + idButton + " · Enter confirm · ↑/↓ choose · Esc cancel · wheel/PgUp/PgDn scroll"
 	}
 	if rt.showBrowserHelp {
 		return "[Close] · PgUp/PgDn/wheel scroll · other key returns"
+	}
+	if rt.configuration != nil {
+		if rt.size.cols < 55 {
+			return "[a] [d] [i] [Esc] · CONFIGURATION · Tab sections · s sync"
+		}
+		return "[a Add] [d Remove] [i ID] [Esc Back] · CONFIGURATION · Tab/1/2/3 sections · j/k select · s sync · r refresh · q close"
 	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
 	if rt.mode == "bench" && !rt.reconnectRequired && rt.picker == nil && !rt.showBrowserHelp {
@@ -350,7 +400,7 @@ func (rt *runtime) drawPicker(out *strings.Builder, cols, visible int) {
 }
 
 func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
-	lines := []string{"Bench browser — local selection, not twig set", "j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.", "Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.", "p opens Single item / Whole subtree pin picker. Shift+P removes both explicit pin kinds after confirmation. Inherited membership and seeds cannot be unpinned here.", "1/2 switch cached Table/Tree; r fetches native membership; s pulls only this Bench and relationship-rule candidates from ADO. 3 opens the latest unresolved proposal snapshot. Review never pins, authorizes, or applies.", "Ctrl+R acknowledges connection changes. Selection and folds survive refresh, but reset on reconnect. q quits."}
+	lines := []string{"Bench browser — local selection, not twig set", "j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.", "Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.", "b opens Bench Configuration with Pins / Areas / Sprints. Tab or 1/2/3 chooses a section; a adds, d removes after confirmation. Esc returns to the same viewer, selection, folds and viewport.", "p opens Single item / Whole subtree pin picker for the selected item. i enters any positive ID, even with an empty Bench; unknown IDs remain uncached/unverified. Shift+P removes both explicit pin kinds after confirmation. Inherited membership and seeds explain rather than mutate.", "Area choices are Exact or Under. Sprints accept @Current, @Current±N or absolute paths. Alternatives OR within each section; areas AND sprints. No chosen sprints disables automatic membership; pins and protected seeds/pending edits remain additive. Ownership scope is displayed, never changed here.", "Text fields treat q/c/s/p as text; Enter reviews then confirms, Esc cancels the field first, Ctrl+C always quits. Changes are guarded against the captured Bench, native origin and settings digest. No native command runs per keystroke.", "1/2 switch cached Table/Tree; r fetches native membership; s pulls only this Bench and saved-rule candidates from ADO, never shared workspace area/sprint settings. 3 opens the latest unresolved proposal snapshot. Review keeps b=brief and never pins, authorizes, or applies.", "Ctrl+R acknowledges connection changes. Selection and folds survive refresh; reconnect clears all cached data and configuration forms."}
 	rt.drawOverlay(out, cols, visible, lines, []struct{ text, action string }{{"[Close help]", "cancel"}})
 }
 

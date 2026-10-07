@@ -18,9 +18,10 @@ Usage:
 
 Uses the current directory's Twig workspace and current bench by default.
 Requires twig on PATH; does not require Herdr or any Herdr environment variables.
-Semantic Bench reads, pins, and scoped sync prefer twig-bench-native.exe beside this
-browser (twig-bench-native on Unix); otherwise Twig must support browser v1 JSON,
---include-browser, --expect-bench, --expect-binding and --expect-identity.
+Semantic Bench reads, pins, configuration and scoped sync prefer twig-bench-native.exe
+beside this browser (twig-bench-native on Unix); otherwise Twig must support browser
+v1/configuration v1 JSON, --include-browser, --expect-bench, --expect-binding,
+--expect-identity and --expect-settings.
 Normal Twig remains connection-status and proposal-review authority.
 --file opens a specific proposal; otherwise Review finds the latest unresolved proposal.
 Relative proposal paths resolve against --cwd (the current directory by default).
@@ -29,18 +30,25 @@ Keys:
   1 workspace table, 2 bench tree, 3 proposal review
   j/k or up/down select work items locally (not twig set), PgUp/PgDn/Home/End navigate
   left/right collapse/expand, Space toggle; click rows/disclosures; wheel scrolls
-  p pin type picker: Single item / Whole subtree; Shift+P confirms explicit unpin
-  Enter confirms; Esc/c cancels. Seeds/inherited membership explain instead of mutating.
-  Click footer Pin/Unpin, ? discovery help; s Bench-scoped ADO pull, r refresh
+  b Bench Configuration (Pins / Areas / Sprints); Esc returns to the same viewer
+  Tab or 1/2/3 sections; a add, d remove; Enter reviews then confirms; Esc cancels
+  p selected-item pin picker; i any positive ID, even when Bench is empty
+  Unknown IDs stay uncached/unverified. Shift+P confirms both explicit modes' removal.
+  Area Exact/Under; sprint @Current, @Current±N, or absolute iteration path
+  Text fields treat q/c/s/p as text; Esc cancels the field first, Ctrl+C always quits
+  Click footer controls; ? discovery help; s Bench-scoped ADO pull, r refresh
   d details, b brief, Esc/c leave review, Ctrl+R reconnect, q/Ctrl+C quit
 
-Sync pulls only Bench members and relationship-rule candidates; it never flushes
-pending edits. An open review keeps its captured snapshot, never pins, authorizes,
+Sync pulls only Bench members and saved automatic/relationship-rule candidates;
+it never substitutes shared workspace area/sprint settings or flushes pending edits.
+No sprints disables automatic membership; pins/seeds/pending guards remain additive.
+An open review keeps its captured snapshot, never pins, authorizes,
 or applies. Fresh observations and operations check the admitted native origin;
 local selection/folding uses retained snapshots without waiting for subprocesses.
-Selection/folds survive refresh; connection changes clear data and reset them.
-Standalone status checks bracket companion operations; native expected-origin and
-expected-Bench guards refuse retargeting. There is no ANSI identity scraping fallback.
+Selection/folds/viewport survive configuration entry and exit; reconnect clears forms.
+Standalone status checks bracket companion operations; native expected-origin,
+expected-Bench and settings-digest guards refuse retargeting captured editors.
+There is no ANSI identity scraping fallback.
 
 Build: go build -trimpath -o bin/twig-bench-tui.exe ./cmd/twig-bench-tui
 `

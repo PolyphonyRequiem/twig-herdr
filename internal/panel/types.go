@@ -19,6 +19,7 @@ type Request struct {
 type Snapshot struct {
 	Mode              string `json:"mode"`
 	View              string `json:"view"`
+	Configuring       bool   `json:"configuring"`
 	ReviewFile        string `json:"file,omitempty"`
 	Ready             bool   `json:"ready"`
 	BindingID         string `json:"bindingId,omitempty"`

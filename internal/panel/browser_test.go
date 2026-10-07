@@ -23,6 +23,7 @@ func browserFixture(t *testing.T) (*runtime, *BrowserSnapshot) {
 		{Key: "root/3", ID: 3, Title: "Other item", Label: "Other item", Membership: "ancestor context"},
 		{Key: "seed/-1", ID: -1, Title: "Unpublished", Label: "Unpublished", IsSeed: true, Membership: "seed"},
 	}}
+	snapshot.Configuration = &BenchConfiguration{Version: 1, SettingsDigest: "settings", AssigneeSummary: "canonical self", Areas: []BenchArea{}, Sprints: []BenchSprint{}, Pins: []BenchPin{{ID: 1, Mode: "single", Cached: true, Title: "Long parent"}, {ID: 1, Mode: "tree", Cached: true, Title: "Long parent"}}}
 	rt.browser.replace(snapshot)
 	return rt, snapshot
 }

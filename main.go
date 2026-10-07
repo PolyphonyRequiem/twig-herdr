@@ -28,26 +28,34 @@ Usage:
 
 Requires Herdr 0.9.0+ and Twig on PATH for digest-guarded proposal review.
 Install the private twig-bench-native companion bundle beside this browser for
-semantic Bench reads, guarded local pin changes, scoped sync, and host admission.
+semantic Bench reads, guarded local pin/configuration changes, scoped sync, and host admission.
 Companion operations hold native connection admission and expected-origin guards;
 status fingerprints detect host changes but are not atomic native snapshot tokens.
 Without the bundle, normal Twig must provide qualified-attachment-snapshot-v1
-host admission plus --include-browser, --expect-bench, --expect-binding and
---expect-identity. No ANSI identity scraping or auth fallback is used.
+host admission plus --include-browser, --expect-bench, --expect-binding,
+--expect-identity and --expect-settings, plus configuration v1 in browser JSON.
+No ANSI identity scraping or auth fallback is used.
 New benches open in Tree view; explicit Table choices are preserved.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k or up/down select local work items (not twig set), left/right collapse/expand,
 Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
-p opens Single item / Whole subtree pin picker; Shift+P confirms removal of both
-explicit pin kinds. Esc/c cancels; inherited membership and seeds explain instead
-of mutating. Click footer Pin/Unpin controls; ? opens discovery help.
-s pulls only this Bench and relationship-rule candidates from ADO; never flushes
-pending edits. r refreshes cached membership (redraw only during Review).
+b opens Bench Configuration (Pins / Areas / Sprints); Esc returns to the same viewer.
+Tab or 1/2/3 chooses a section; a adds, d removes; Enter reviews then confirms.
+p opens Single item / Whole subtree for the selected item; i enters any positive ID,
+including in an empty Bench. Unknown IDs stay uncached/unverified, never guessed or
+automatically fetched. Shift+P confirms explicit unpin; inherited membership and
+seeds explain instead of mutating. Click footer controls; ? opens discovery help.
+Areas distinguish Exact/Under; sprints accept @Current, @Current±N or absolute paths.
+No sprints disables automatic membership; areas alone never enable a project-wide rule.
+Text fields treat q/c/s/p as text. Esc cancels input first; Ctrl+C always quits.
+s pulls only this Bench and its saved automatic/relationship rules from ADO; never
+flushes pending edits or substitutes shared workspace area/sprint settings.
+r refreshes cached membership (redraw only during Review).
 d/b Details/Brief, Esc/c leaves Review, q closes. Review keeps its captured snapshot
 after sync and never pins, authorizes, or applies changes.
 Ctrl+R acknowledges reconnect; binding/principal changes clear all previous actor data.
-Selection/folds survive refresh and reset on reconnect. Native origin/Bench guards
-refuse stale mutations without retargeting an open picker.
+Selection/folds/viewport survive configuration entry and exit. Native origin/Bench
+and settings-digest guards refuse stale mutations without retargeting captured forms.
 
 Relative --file paths resolve from the source pane's working directory. File-free
 Review keeps using that cwd to find the latest proposal; an explicit absolute

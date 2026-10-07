@@ -8,21 +8,35 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Destination = Join-Path $InstallDirectory 'twig-bench-tui.exe'
 $NativeDirectory = Join-Path $InstallDirectory 'twig-bench-native'
 $NativeDestination = Join-Path $NativeDirectory 'twig-bench-native.exe'
+
+function Assert-BenchCompanion([string]$Path) {
+    $NativeHelp = & $Path workspace --help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $NativeHelp -notmatch '--include-browser') {
+        throw 'Native companion must support workspace --include-browser. Publish the updated Twig source first.'
+    }
+    $ConfigurationHelp = & $Path bench configuration --help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $ConfigurationHelp -notmatch '--expect-bench') {
+        throw 'Native companion must support guarded bench configuration. Publish the updated Twig source first.'
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Path) 'e_sqlite3.dll') -PathType Leaf)) {
+        throw 'Native companion must include its e_sqlite3.dll dependency.'
+    }
+}
+
 if ($NativeCompanionPath) {
     $NativeCompanionPath = [System.IO.Path]::GetFullPath($NativeCompanionPath)
     if (-not (Test-Path -LiteralPath $NativeCompanionPath -PathType Leaf)) {
         throw "Native companion not found: $NativeCompanionPath"
     }
-    $NativeHelp = & $NativeCompanionPath workspace --help 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $NativeHelp -notmatch '--include-browser') {
-        throw 'Native companion must support workspace --include-browser. Publish the updated Twig source first.'
-    }
+    Assert-BenchCompanion $NativeCompanionPath
     $SqliteSource = Join-Path (Split-Path -Parent $NativeCompanionPath) 'e_sqlite3.dll'
     if (-not (Test-Path -LiteralPath $SqliteSource -PathType Leaf)) {
         throw 'Published native companion must include its e_sqlite3.dll dependency.'
     }
 } elseif (-not (Test-Path -LiteralPath $NativeDestination)) {
     throw 'Supply -NativeCompanionPath pointing to the updated published Twig executable; the browser requires its semantic workspace contract.'
+} else {
+    Assert-BenchCompanion $NativeDestination
 }
 
 function Install-Binary([string]$Source, [string]$Target) {
