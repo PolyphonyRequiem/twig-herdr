@@ -4,6 +4,8 @@ package panel
 type Config struct {
 	Cwd         string
 	InitialView string
+	// Standalone uses connection status checks instead of qualified host snapshots.
+	Standalone bool
 }
 
 // Request is delivered to the terminal-owning event loop. Commands never apply changes.

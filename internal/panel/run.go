@@ -57,13 +57,13 @@ type runtime struct {
 	notice     string
 	noticeSeq  uint64
 
-	binding           HostBinding
-	reconnectRequired bool
-	reconnectReason   string
-	admissionCancel   context.CancelFunc
-	admissionGen      uint64
-	admissionReply    chan Result
-	admissionActions []event
+	binding              HostBinding
+	reconnectRequired    bool
+	reconnectReason      string
+	admissionCancel      context.CancelFunc
+	admissionGen         uint64
+	admissionReply       chan Result
+	admissionActions     []event
 	admissionActionCount int
 
 	benchSummary string
@@ -151,16 +151,16 @@ type event struct {
 
 	size size
 
-	session     *session
-	sessionKind string
-	summary     string
-	data        []byte
-	err         error
+	session      *session
+	sessionKind  string
+	summary      string
+	data         []byte
+	err          error
 	admissionErr error
-	token       uint64
-	candidate   proposalCandidate
-	binding     HostBinding
-	reconnect   bool
+	token        uint64
+	candidate    proposalCandidate
+	binding      HostBinding
+	reconnect    bool
 }
 
 // Run drives the native panel terminal UI.
@@ -218,7 +218,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 	rt.cancel = cancel
 	defer rt.shutdown()
 	admissionCtx, admissionCancel := context.WithTimeout(ctx, 15*time.Second)
-	binding, admissionErr := ReadHostBinding(admissionCtx, rt.cfg.Cwd, "")
+	binding, admissionErr := rt.readBinding(admissionCtx, rt.cfg.Cwd, "")
 	admissionCancel()
 	if admissionErr != nil {
 		return admissionErr
@@ -252,6 +252,9 @@ func (rt *runtime) run(requests <-chan Request) error {
 				if !rt.closing && !rt.reconnectRequired {
 					if rt.mode == "review" {
 						rt.checkAdmission(nil, false)
+					} else if rt.cfg.Standalone {
+						rt.admissionActions = append(rt.admissionActions, ev)
+						rt.checkAdmission(nil, false)
 					} else {
 						rt.beginBenchRefresh(nil, false)
 					}
@@ -259,7 +262,12 @@ func (rt *runtime) run(requests <-chan Request) error {
 			case evSignal:
 				rt.shutdown()
 			case evSessionStarted:
-				rt.handleSessionStarted(ev.session, ev.summary)
+				if rt.cfg.Standalone {
+					rt.admissionActions = append(rt.admissionActions, ev)
+					rt.checkAdmission(nil, false)
+				} else {
+					rt.handleSessionStarted(ev.session, ev.summary)
+				}
 			case evSessionData:
 				rt.handleSessionData(ev.session, ev.data)
 			case evSessionExit:
@@ -933,7 +941,7 @@ func (rt *runtime) waitSession(ctx context.Context, sess *session, cwd, snapshot
 	// Even a successful read must still belong to the original actor when it
 	// becomes the retained ready frame: selection can change after its last read.
 	admissionCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	_, admissionErr := ReadHostBinding(admissionCtx, cwd, snapshot)
+	_, admissionErr := rt.readBinding(admissionCtx, cwd, snapshot)
 	cancel()
 	rt.emit(event{kind: evSessionExit, session: sess, err: err, admissionErr: admissionErr})
 }
@@ -1000,7 +1008,7 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 	if sess.term == nil {
 		return
 	}
-	if sess.kind == "review" {
+	if sess.kind == "review" || rt.cfg.Standalone {
 		// Interactive review never exits while idle. Its assembled model can
 		// arrive after rebinding, so qualify bytes before VT, prompt readiness,
 		// reply publication or any deferred redraw action can consume them.
@@ -1180,7 +1188,6 @@ func (rt *runtime) queueReviewDensity(density string) {
 	}
 	rt.writeReviewDensity(sess, density)
 }
-
 
 func (rt *runtime) writeReviewDensity(sess *session, density string) {
 	if sess == nil || sess.pty == nil {

@@ -3,6 +3,7 @@ package panel
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,9 @@ func parseHostBinding(output []byte) (HostBinding, error) {
 }
 
 func boundArgs(args []string, snapshot string) []string {
+	if strings.HasPrefix(snapshot, "status:") {
+		return args
+	}
 	return append(args, "--connection-snapshot", snapshot)
 }
 
@@ -70,6 +74,43 @@ func twigOutput(ctx context.Context, cwd string, args ...string) ([]byte, error)
 		return nil, fmt.Errorf("twig: %w: %s %s", err, strings.TrimSpace(string(output)), strings.TrimSpace(stderr.String()))
 	}
 	return output, nil
+}
+
+// readBinding keeps Herdr on qualified native admission. Standalone terminals
+// compare the shipped CLI's connection status before displaying retained output.
+// Status checks are not atomic native host-snapshot admission.
+func (rt *runtime) readBinding(ctx context.Context, cwd, expected string) (HostBinding, error) {
+	if !rt.cfg.Standalone {
+		return ReadHostBinding(ctx, cwd, expected)
+	}
+	output, err := twigOutput(ctx, cwd, "connection", "status", "-o", "json")
+	if err != nil {
+		return HostBinding{}, err
+	}
+	return parseStandaloneBinding(output, expected)
+}
+
+func parseStandaloneBinding(output []byte, expected string) (HostBinding, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(output, &fields); err != nil {
+		return HostBinding{}, fmt.Errorf("invalid connection status: %w", err)
+	}
+	var binding HostBinding
+	if err := json.Unmarshal(output, &binding); err != nil {
+		return HostBinding{}, err
+	}
+	if binding.BindingID == "" || binding.IdentityID == "" || binding.WorktreeRoot == "" {
+		return HostBinding{}, errors.New("connection status is missing binding, identity, or workspace")
+	}
+	canonical, err := json.Marshal(fields)
+	if err != nil {
+		return HostBinding{}, err
+	}
+	binding.Snapshot = fmt.Sprintf("status:%x", sha256.Sum256(canonical))
+	if expected != "" && binding.Snapshot != expected {
+		return HostBinding{}, errors.New("binding-changed/reconnect: connection status changed; explicitly reconnect")
+	}
+	return binding, nil
 }
 
 func bindingChanged(text string) bool {
@@ -191,7 +232,7 @@ func (rt *runtime) checkAdmission(reply chan Result, reconnect bool) {
 		expected = ""
 	}
 	go func() {
-		binding, err := ReadHostBinding(ctx, rt.cfg.Cwd, expected)
+		binding, err := rt.readBinding(ctx, rt.cfg.Cwd, expected)
 		rt.emit(event{kind: evAdmissionResolved, token: gen, binding: binding, err: err, reconnect: reconnect})
 	}()
 }
@@ -222,6 +263,10 @@ func (rt *runtime) handleAdmissionResolved(ev event) {
 				break
 			}
 			switch action.kind {
+			case evBenchTick:
+				rt.beginBenchRefresh(nil, false)
+			case evSessionStarted:
+				rt.handleSessionStarted(action.session, action.summary)
 			case evKey:
 				rt.handleAdmittedKey(action.key)
 			case evResize:
