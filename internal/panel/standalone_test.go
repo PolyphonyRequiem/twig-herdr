@@ -31,6 +31,19 @@ func TestStandaloneRefusesIncompleteConnection(t *testing.T) {
 	}
 }
 
+func TestHeaderShowsAccountWithoutInternalAuthorityIDs(t *testing.T) {
+	binding, err := parseStandaloneBinding([]byte(`{"bindingId":"bind-internal","identityId":"id-internal","account":"person@example.com","identity":"work","worktreeRoot":"/work"}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, _ := browserFixture(t)
+	rt.binding = binding
+	header := rt.headerText()
+	if !strings.Contains(header, "person@example.com") || strings.Contains(header, "id-internal") || strings.Contains(header, "bind-internal") || strings.Contains(header, "(cached)") {
+		t.Fatalf("header must show the account without authority IDs or cache qualification: %s", header)
+	}
+}
+
 func TestStandaloneDoesNotSendUnsupportedSnapshotFlag(t *testing.T) {
 	standalone := boundArgs([]string{"workspace", "--view", "tree"}, "status:abc")
 	if strings.Contains(strings.Join(standalone, " "), "--connection-snapshot") {

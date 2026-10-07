@@ -25,6 +25,8 @@ type HostBinding struct {
 	Snapshot        string `json:"snapshot"`
 	BindingID       string `json:"bindingId"`
 	IdentityID      string `json:"identityId"`
+	Account         string `json:"account"`
+	IdentityName    string `json:"identity"`
 	WorktreeRoot    string `json:"worktreeRoot"`
 }
 

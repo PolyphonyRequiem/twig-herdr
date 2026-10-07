@@ -223,8 +223,15 @@ func (rt *runtime) headerText() string {
 	if rt.reviewFile != "" {
 		subject = filepath.Base(rt.reviewFile)
 	}
-	return fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Identity: %s (cached) · Bench: \x1b[1m%s\x1b[22m · Binding: %s · \x1b[2m%s\x1b[22m",
-		safe(view), safe(rt.binding.IdentityID), safe(bench), safe(rt.binding.BindingID), safe(subject))
+	account := strings.TrimSpace(rt.binding.Account)
+	if account == "" {
+		account = strings.TrimSpace(rt.binding.IdentityName)
+	}
+	if account == "" {
+		account = "unavailable"
+	}
+	return fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · User: %s · Bench: \x1b[1m%s\x1b[22m · \x1b[2m%s\x1b[22m",
+		safe(view), safe(account), safe(bench), safe(subject))
 }
 
 func (rt *runtime) footerText(truncated bool) string {
