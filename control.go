@@ -338,8 +338,15 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 	var bench struct {
 		Current string `json:"current"`
 	}
-	if err := executeJSON("twig", source.Cwd, []string{"bench", "list", "-o", "json", "--connection-snapshot", binding.Snapshot}, &bench); err != nil {
+	benchArgs := []string{"bench", "list", "-o", "json"}
+	if !strings.HasPrefix(binding.Snapshot, "status:") {
+		benchArgs = append(benchArgs, "--connection-snapshot", binding.Snapshot)
+	}
+	if err := executeJSON("twig", source.Cwd, benchArgs, &bench); err != nil {
 		return controlResponse{}, fmt.Errorf("source workspace is not ready: %w", err)
+	}
+	if _, err := panel.ReadHostBinding(ctx, source.Cwd, binding.Snapshot); err != nil {
+		return controlResponse{}, err
 	}
 	if bench.Current == "" {
 		return controlResponse{}, errors.New("source workspace has no current bench")
@@ -369,10 +376,10 @@ func controlPanel(source paneInfo, command, proposal string) (controlResponse, e
 		record, err := readRegistration(file)
 		if err == nil {
 			result, err := requestPanel(record, controlRequest{Command: "status"})
-				if result.ReconnectRequired {
+			if result.ReconnectRequired {
 				result.Error = result.Snapshot.Error
 				return result, errors.New(result.Error)
-				}
+			}
 			if err == nil && result.Ready {
 				if command == "review" {
 					return requestPanel(record, controlRequest{Command: "review", File: proposal})

@@ -20,15 +20,11 @@ func TestBindingRefusalErasesVisibleAndHiddenActorData(t *testing.T) {
 	rt.binding = HostBinding{Snapshot: "native-origin", BindingID: "original-binding", IdentityID: "original-principal"}
 	rt.mode = "review"
 	rt.reviewFile = "original-proposal.json"
-	bench := &session{kind: "bench", term: vt.NewEmulator(100, 6), hasData: true}
-	bench.term.SetScrollbackSize(100)
-	_, _ = bench.term.Write([]byte(strings.Repeat("PRIVATE ORIGINAL BENCH\r\n", 12)))
+	rt.browser.replace(&BrowserSnapshot{BenchID: "bench", Roots: []*BrowserNode{{Key: "1", ID: 1, Label: "PRIVATE ORIGINAL BENCH"}}})
 	review := &session{kind: "review", gen: 1, term: vt.NewEmulator(100, 6), hasData: true, ready: true}
 	_, _ = review.term.Write([]byte("PRIVATE ORIGINAL PROPOSAL"))
 	rt.review.launchGen = 1
 	rt.review.session = review
-	rt.review.restoreBench = bench
-	rt.bench.active = bench
 	pane := vt.NewEmulator(100, 10)
 	pane.SetScrollbackSize(100)
 	_, _ = pane.Write([]byte(strings.Repeat("PRIVATE ORIGINAL PANE\r\n", 20)))
@@ -47,8 +43,8 @@ func TestBindingRefusalErasesVisibleAndHiddenActorData(t *testing.T) {
 	if pane.ScrollbackLen() != 0 {
 		t.Fatal("containing terminal retained original actor scrollback after refusal")
 	}
-	if bench.term != nil || review.term != nil {
-		t.Fatal("hidden old actor VT buffers survived the refusal")
+	if rt.browser.snapshot != nil || review.term != nil {
+		t.Fatal("hidden old actor buffers survived the refusal")
 	}
 	status := rt.snapshot()
 	if status.Ready || !status.ReconnectRequired || status.IdentityID != "original-principal" || status.ReviewFile != "original-proposal.json" {
@@ -82,12 +78,9 @@ func TestRenderedWorkItemTextIsNotNativeReconnectEvidence(t *testing.T) {
 	rt.ctx = context.Background()
 	rt.size = size{cols: 100, rows: 10}
 	rt.binding = HostBinding{Snapshot: "native-origin", BindingID: "original-binding", IdentityID: "original-principal"}
-	rt.bench.launchGen = 1
-	sess := &session{kind: "bench", gen: 1, term: vt.NewEmulator(100, 6)}
-	rt.bench.active = sess
+	rt.browser.replace(&BrowserSnapshot{BenchID: "bench", Roots: []*BrowserNode{{Key: "1", ID: 1, Label: "PRIVATE binding-changed: migration-incomplete: design notes"}}})
 	output := captureStdout(t, func() {
-		rt.handleSessionData(sess, []byte("PRIVATE binding-changed:"))
-		rt.handleSessionData(sess, []byte(" migration-incomplete: design notes"))
+		rt.draw()
 	})
 	if rt.snapshot().ReconnectRequired || !strings.Contains(ansi.Strip(output), "PRIVATE binding-changed:") {
 		t.Fatalf("successful work-item content was treated as a native refusal: %q", ansi.Strip(output))
@@ -113,7 +106,7 @@ func TestFailedExplicitReconnectKeepsPanelStopped(t *testing.T) {
 func TestFailedWorkspaceAdmissionStopsBeforeReportingReady(t *testing.T) {
 	for _, operation := range []struct {
 		name string
-		err error
+		err  error
 	}{
 		{name: "successful subprocess", err: nil},
 		{name: "failed subprocess", err: errors.New("workspace operation failed")},
@@ -123,13 +116,11 @@ func TestFailedWorkspaceAdmissionStopsBeforeReportingReady(t *testing.T) {
 			rt.size = size{cols: 100, rows: 10}
 			rt.binding = HostBinding{Snapshot: "native-origin", BindingID: "original-binding", IdentityID: "original-principal"}
 			rt.bench.launchGen = 1
-			sess := &session{kind: "bench", gen: 1, view: "table", term: vt.NewEmulator(100, 6), hasData: true}
-			_, _ = sess.term.Write([]byte("PRIVATE ORIGINAL WORKSPACE"))
-			rt.bench.pending = sess
+			snapshot := &BrowserSnapshot{BenchID: "bench", Roots: []*BrowserNode{{Key: "1", ID: 1, Label: "PRIVATE ORIGINAL WORKSPACE"}}}
 			reply := make(chan Result, 1)
 			rt.bench.pendingReply = reply
 			output := captureStdout(t, func() {
-				rt.handleSessionExit(sess, operation.err, errors.New("binding-changed: native origin is no longer current"))
+				rt.handleBrowserLoaded(event{token: 1, browser: snapshot, err: operation.err, admissionErr: errors.New("binding-changed: native origin is no longer current")})
 			})
 			result := <-reply
 			if result.Err == nil || result.Snapshot.Ready || !result.Snapshot.ReconnectRequired {
@@ -144,11 +135,12 @@ func TestFailedWorkspaceAdmissionStopsBeforeReportingReady(t *testing.T) {
 
 func TestLocalReviewActionCannotRedrawBeforeOriginQualification(t *testing.T) {
 	for _, action := range []struct {
-		name string
+		name   string
 		invoke func(*runtime)
 	}{
 		{name: "redraw", invoke: func(rt *runtime) { rt.handleKey(uv.KeyPressEvent(uv.Key{Code: 'r'})) }},
 		{name: "scroll to hidden output", invoke: func(rt *runtime) { rt.handleKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyEnd})) }},
+		{name: "wheel to hidden output", invoke: func(rt *runtime) { rt.handleMouse(uv.Mouse{Button: uv.MouseWheelDown}) }},
 		{name: "resize", invoke: func(rt *runtime) { rt.handleResize(size{cols: 90, rows: 9}) }},
 	} {
 		t.Run(action.name, func(t *testing.T) {

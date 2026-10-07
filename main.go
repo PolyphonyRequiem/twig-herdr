@@ -26,19 +26,28 @@ Usage:
   twig-herdr panel
   twig-herdr --version
 
-Requires Herdr 0.9.0+ and Twig qualified-attachment-snapshot-v1 protocol on PATH:
-connection host-snapshot -o json and --connection-snapshot on bench/workspace/proposal
-operations, plus digest-guarded interactive proposal preview. Upgrade CLI/plugin together;
-close legacy hosts and verify native quiescence before migration/admission.
+Requires Herdr 0.9.0+ and Twig on PATH for digest-guarded proposal review.
+Install the private twig-bench-native companion bundle beside this browser for
+semantic Bench reads, guarded local pin changes, scoped sync, and host admission.
+Companion operations hold native connection admission and expected-origin guards;
+status fingerprints detect host changes but are not atomic native snapshot tokens.
+Without the bundle, normal Twig must provide qualified-attachment-snapshot-v1
+host admission plus --include-browser, --expect-bench, --expect-binding and
+--expect-identity. No ANSI identity scraping or auth fallback is used.
 New benches open in Tree view; explicit Table choices are preserved.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
-j/k/arrows scroll, PgUp/PgDn/Home/End navigate, s syncs from ADO (pull only),
-r refreshes the bench (redraw only during Review), d/b Details/Brief,
-Esc/c leaves Review, q closes the panel. Sync never flushes pending edits;
-an open Review keeps its captured snapshot after sync.
-Ctrl+R explicitly acknowledges reconnect and launches a fresh admitted CLI runtime.
-Effective binding/principal changes clear previous actor data and disable refresh/view/review.
-Review never authorizes or applies changes; original native digest/origin remain intact.
+j/k or up/down select local work items (not twig set), left/right collapse/expand,
+Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
+p opens Single item / Whole subtree pin picker; Shift+P confirms removal of both
+explicit pin kinds. Esc/c cancels; inherited membership and seeds explain instead
+of mutating. Click footer Pin/Unpin controls; ? opens discovery help.
+s pulls only this Bench and relationship-rule candidates from ADO; never flushes
+pending edits. r refreshes cached membership (redraw only during Review).
+d/b Details/Brief, Esc/c leaves Review, q closes. Review keeps its captured snapshot
+after sync and never pins, authorizes, or applies changes.
+Ctrl+R acknowledges reconnect; binding/principal changes clear all previous actor data.
+Selection/folds survive refresh and reset on reconnect. Native origin/Bench guards
+refuse stale mutations without retargeting an open picker.
 
 Relative --file paths resolve from the source pane's working directory. File-free
 Review keeps using that cwd to find the latest proposal; an explicit absolute

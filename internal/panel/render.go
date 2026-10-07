@@ -44,90 +44,101 @@ func (rt *runtime) draw() {
 	if rt.closing {
 		return
 	}
-	if !rt.cfg.Standalone && len(rt.admissionActions) != 0 {
-		// A queued first action cannot expose another old frame while its native
-		// origin check is outstanding. Refusal clears this queue before redraw.
+	// Review observations still require their native publication boundary.
+	if rt.mode == "review" && !rt.cfg.Standalone && len(rt.admissionActions) != 0 {
 		return
 	}
 	if rt.size.cols <= 0 || rt.size.rows <= 0 {
 		rt.size = rt.panelSize()
 	}
-
-	cols, rows := rt.size.cols, rt.size.rows
-	if cols < 20 {
-		cols = 20
-	}
-	if rows < 1 {
-		rows = 1
-	}
+	cols, rows := max(rt.size.cols, 1), max(rt.size.rows, 1)
 	contentRows := rt.contentVisibleRows()
-
-	var sess *session
-	key := rt.benchView
-	placeholder := "Loading bench output…"
-	if rt.mode == "review" {
-		key = "review"
-		sess = rt.review.session
-		placeholder = "Waiting for review output…"
-	} else {
-		sess = rt.bench.active
-	}
-	if rt.reconnectRequired {
-		sess = nil
-		placeholder = "Prior binding data unavailable. Ctrl+R explicitly reconnects."
-	}
-
-	offset := rt.offsets[key]
-	if offset < 0 {
-		offset = 0
-	}
-	maxStart := maxOffset(sess, contentRows)
-	if offset > maxStart {
-		offset = maxStart
-	}
-	rt.offsets[key] = offset
-
+	rt.hits = rt.hits[:0]
 	var out strings.Builder
 	out.Grow(cols * rows)
 	out.WriteString("\x1b[0m\x1b[H\x1b[2J")
 	if rt.reconnectRequired {
-		// Also clear the containing terminal's retained scrollback, not just VT nodes.
 		out.WriteString("\x1b[3J")
 	}
 	out.WriteString("\x1b[1;1H\x1b[2K")
 	drawBar(&out, rt.headerText(), cols, "\x1b[48;2;22;40;59m\x1b[38;2;177;217;239m")
-
 	if rows >= 3 {
-		fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", 2)
+		out.WriteString("\x1b[2;1H\x1b[2K")
 		drawDivider(&out, cols, "\x1b[48;2;22;40;59m\x1b[38;2;57;84;106m")
 	}
-
-	truncated := sess != nil && sess.term != nil && sess.term.ScrollbackLen() >= scrollbackLimit
-	if contentRows > 0 {
-		if sess == nil || sess.term == nil || !sess.hasData {
-			fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", 3)
-			out.WriteString("\x1b[38;2;129;157;177m")
-			out.WriteString(ansi.Truncate(placeholder, cols, "…"))
-			out.WriteString("\x1b[0m")
-			for row := 1; row < contentRows; row++ {
-				fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", row+3)
-			}
-		} else {
-			for row := 0; row < contentRows; row++ {
-				fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", row+3)
-				line := sessionLine(sess, offset+row, cols)
-				out.WriteString(line.Render())
+	truncated := false
+	if rt.mode == "review" && !rt.reconnectRequired {
+		sess := rt.review.session
+		truncated = sess != nil && sess.term != nil && sess.term.ScrollbackLen() >= scrollbackLimit
+		offset := max(0, min(rt.offsets["review"], maxOffset(sess, contentRows)))
+		rt.offsets["review"] = offset
+		for row := range contentRows {
+			fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", row+3)
+			if sess != nil && sess.term != nil && sess.hasData {
+				out.WriteString(sessionLine(sess, offset+row, cols).Render())
+			} else if row == 0 {
+				out.WriteString(ansi.Truncate("Waiting for review output…", cols, "…"))
 			}
 		}
+	} else if rt.reconnectRequired {
+		if contentRows > 0 {
+			out.WriteString("\x1b[3;1H")
+			out.WriteString(ansi.Truncate("Prior binding data unavailable. Ctrl+R explicitly reconnects.", cols, "…"))
+		}
+	} else {
+		rt.browser.ensureLayout(rt.benchView, cols)
+		if rt.picker != nil {
+			rt.drawPicker(&out, cols, contentRows)
+		} else if rt.showBrowserHelp {
+			rt.drawBrowserHelp(&out, cols, contentRows)
+		} else {
+			rt.drawBrowserRows(&out, cols, contentRows)
+		}
 	}
-
 	if rows >= 4 {
 		fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", rows-1)
-		drawDivider(&out, cols, "\x1b[48;2;27;37;52m\x1b[38;2;57;84;106m")
+		if rt.notice != "" {
+			drawBar(&out, safe(rt.notice), cols, "\x1b[48;2;27;37;52m\x1b[38;2;255;190;105m")
+		} else {
+			drawDivider(&out, cols, "\x1b[48;2;27;37;52m\x1b[38;2;57;84;106m")
+		}
 	}
 	if rows >= 2 {
 		fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", rows)
 		drawBar(&out, rt.footerText(truncated), cols, "\x1b[48;2;27;37;52m\x1b[38;2;152;175;195m")
+		if rt.mode != "review" && !rt.reconnectRequired && rt.picker == nil && !rt.showBrowserHelp {
+			for _, button := range []struct{ text, action string }{{"[p Pin]", "pin"}, {"[P Unpin]", "unpin"}, {"[? Help]", "help"}} {
+				if cols < 40 {
+					if button.action == "pin" {
+						button.text = "[p]"
+					} else if button.action == "unpin" {
+						button.text = "[P]"
+					} else {
+						button.text = "[?]"
+					}
+				}
+				plain := ansi.Strip(rt.footerText(truncated))
+				if index := strings.Index(plain, button.text); index >= 0 {
+					x := ansi.StringWidth(plain[:index])
+					end := x + ansi.StringWidth(button.text)
+					if end <= cols {
+						rt.hits = append(rt.hits, hitTarget{x1: x, x2: end, y: rows - 1, action: button.action})
+					}
+				}
+			}
+		}
+		if rt.mode == "bench" && !rt.reconnectRequired && (rt.picker != nil || rt.showBrowserHelp) {
+			plain := ansi.Strip(rt.footerText(truncated))
+			for _, button := range []struct{ text, action string }{{"[OK]", "confirm"}, {"[Cancel]", "cancel"}, {"[Close]", "cancel"}} {
+				if index := strings.Index(plain, button.text); index >= 0 {
+					x := ansi.StringWidth(plain[:index])
+					end := x + ansi.StringWidth(button.text)
+					if end <= cols {
+						rt.hits = append(rt.hits, hitTarget{x1: x, x2: end, y: rows - 1, action: button.action})
+					}
+				}
+			}
+		}
 	}
 	out.WriteString("\x1b[0m\x1b[?25l")
 	_, _ = os.Stdout.WriteString(out.String())
@@ -157,6 +168,13 @@ func drawDivider(out *strings.Builder, width int, style string) {
 }
 
 func (rt *runtime) headerText() string {
+	if rt.picker != nil {
+		verb := "Pin"
+		if rt.picker.remove {
+			verb = "Unpin"
+		}
+		return fmt.Sprintf("%s #%d · %s · Bench: %s", verb, rt.picker.node.ID, safe(rt.picker.node.Title), safe(rt.picker.benchID))
+	}
 	bench := rt.benchSummary
 	if bench == "" {
 		bench = "loading"
@@ -184,11 +202,15 @@ func (rt *runtime) footerText(truncated bool) string {
 	if truncated {
 		bits = append(bits, "\x1b[1;38;2;255;190;105mOUTPUT TRUNCATED — earliest lines discarded\x1b[22;38;2;152;175;195m")
 	}
-	if rt.notice != "" {
+	if rt.notice != "" && rt.size.rows < 4 {
 		bits = append(bits, "\x1b[38;2;255;190;105m"+safe(rt.notice)+"\x1b[38;2;152;175;195m")
 	}
 	mode := rt.benchView
-	help := "1 table · 2 tree · 3 review · s sync · r refresh · j/k scroll · PgUp/PgDn/Home/End · q close"
+	buttons := "[p Pin] [P Unpin] [? Help]"
+	if rt.size.cols < 40 {
+		buttons = "[p] [P] [?]"
+	}
+	help := buttons + " · 1 table · 2 tree · 3 review · s sync · r refresh · j/k select · ←/→/Space fold · wheel scroll · q close"
 	if rt.mode == "review" {
 		mode = "review"
 		help = "d details · b back · s sync · Esc/c exit review · r redraw · 1 table · 2 tree · 3 review · j/k scroll · PgUp/PgDn/Home/End · q close"
@@ -197,7 +219,22 @@ func (rt *runtime) footerText(truncated bool) string {
 		mode = "reconnect-required"
 		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
 	}
+	if rt.picker != nil {
+		if rt.syncCancel != nil {
+			return "[Cancel] · Sync in progress; pin confirmation waits"
+		}
+		if rt.picker.explanation != "" {
+			return "[Close] · Enter/Esc close · wheel/PgUp/PgDn scroll"
+		}
+		return "[OK] [Cancel] · Enter confirm · ↑/↓ choose · Esc cancel · wheel/PgUp/PgDn scroll"
+	}
+	if rt.showBrowserHelp {
+		return "[Close] · PgUp/PgDn/wheel scroll · other key returns"
+	}
 	bits = append(bits, "\x1b[1;38;2;154;218;250m"+safe(strings.ToUpper(mode))+"\x1b[22;38;2;152;175;195m", help)
+	if rt.mode == "bench" && !rt.reconnectRequired && rt.picker == nil && !rt.showBrowserHelp {
+		return buttons + " · " + strings.Join(bits[:len(bits)-2], " · ") + strings.TrimPrefix(help, buttons) + " · " + safe(strings.ToUpper(mode))
+	}
 	return strings.Join(bits, "  ·  ")
 }
 
@@ -230,4 +267,113 @@ func sessionLine(sess *session, index, width int) uv.Line {
 		x += step
 	}
 	return line
+}
+
+func (rt *runtime) drawBrowserRows(out *strings.Builder, cols, visible int) {
+	b := &rt.browser
+	offset := max(0, min(rt.offsets[rt.benchView], max(len(b.lines)-visible, 0)))
+	rt.offsets[rt.benchView] = offset
+	for y := range visible {
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+3)
+		index := offset + y
+		if index >= len(b.lines) {
+			if y == 0 {
+				if b.snapshot == nil {
+					out.WriteString(ansi.Truncate("Loading semantic Bench…", cols, "…"))
+				} else {
+					out.WriteString(ansi.Truncate("This Bench has no displayed work items. Sync or add a native Bench pin.", cols, "…"))
+				}
+			}
+			continue
+		}
+		line := b.lines[index]
+		if line.row < 0 {
+			out.WriteString("  " + ansi.Truncate(line.text, max(cols-2, 0), ""))
+			continue
+		}
+		selected := b.rows[line.row].node.Key == b.selected
+		marker := "  "
+		if selected {
+			out.WriteString("\x1b[1;38;2;154;218;250m")
+			marker = "› "
+		}
+		out.WriteString(ansi.Truncate(marker, cols, ""))
+		out.WriteString(ansi.Truncate(line.text, max(cols-2, 0), ""))
+		out.WriteString("\x1b[0m")
+		if line.disclosure >= 0 {
+			x := line.disclosure + 2
+			rt.hits = append(rt.hits, hitTarget{x1: x, x2: min(x+2, cols), y: y + 2, action: "fold", row: line.row})
+		}
+		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + 2, action: "select", row: line.row})
+	}
+}
+
+func (rt *runtime) drawPicker(out *strings.Builder, cols, visible int) {
+	p := rt.picker
+	title := fmt.Sprintf("Pin %s #%d — %s", safe(p.node.Type), p.node.ID, safe(p.node.Title))
+	if p.remove {
+		title = fmt.Sprintf("Remove explicit pins from %s #%d — %s", safe(p.node.Type), p.node.ID, safe(p.node.Title))
+	}
+	var lines []string
+	if p.explanation != "" {
+		lines = append(lines, p.explanation)
+	} else if p.remove {
+		lines = append(lines, "Remove: "+strings.Join(p.node.Pins, " + ")+" explicit pin(s). Inherited membership is not removed.")
+	} else {
+		lines = append(lines, "Choose a local durable selector. This does not change the active Twig work item or write to ADO.")
+	}
+	bench := safe(p.benchName)
+	if bench == "" {
+		bench = safe(p.benchID)
+	}
+	lines = append(lines, title, "Bench: "+bench+" ("+safe(p.benchID)+")")
+	// Reserve the final viewport lines for controls, even on narrow terminals.
+	buttons := []struct{ text, action string }{}
+	if p.explanation == "" {
+		first, second := "1 Single item", "2 Whole subtree"
+		if p.remove {
+			first, second = "Remove explicit pins", "Keep pins (cancel)"
+		}
+		if p.choice == 0 {
+			first = "› " + first
+		} else {
+			first = "  " + first
+		}
+		if p.choice == 1 {
+			second = "› " + second
+		} else {
+			second = "  " + second
+		}
+		buttons = append(buttons, struct{ text, action string }{first, "choice0"}, struct{ text, action string }{second, "choice1"})
+	}
+	rt.drawOverlay(out, cols, visible, lines, buttons)
+}
+
+func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
+	lines := []string{"Bench browser — local selection, not twig set", "j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.", "Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.", "p opens Single item / Whole subtree pin picker. Shift+P removes both explicit pin kinds after confirmation. Inherited membership and seeds cannot be unpinned here.", "1/2 switch cached Table/Tree; r fetches native membership; s pulls only this Bench and relationship-rule candidates from ADO. 3 opens the latest unresolved proposal snapshot. Review never pins, authorizes, or applies.", "Ctrl+R acknowledges connection changes. Selection and folds survive refresh, but reset on reconnect. q quits."}
+	rt.drawOverlay(out, cols, visible, lines, []struct{ text, action string }{{"[Close help]", "cancel"}})
+}
+
+func (rt *runtime) drawOverlay(out *strings.Builder, cols, visible int, paragraphs []string, buttons []struct{ text, action string }) {
+	var lines []string
+	for _, paragraph := range paragraphs {
+		lines = append(lines, strings.Split(ansi.Hardwrap(paragraph, max(cols, 1), true), "\n")...)
+	}
+	textRows := max(visible-len(buttons), 0)
+	rt.overlayMax = max(len(lines)-max(textRows, 1), 0)
+	rt.overlayOffset = max(0, min(rt.overlayOffset, rt.overlayMax))
+	for y := range min(textRows, len(lines)-rt.overlayOffset) {
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+3)
+		out.WriteString(ansi.Truncate(lines[rt.overlayOffset+y], cols, ""))
+	}
+	for i, button := range buttons {
+		y := textRows + i
+		if y >= visible {
+			break
+		}
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K\x1b[1;38;2;154;218;250m", y+3)
+		out.WriteString(ansi.Truncate(button.text, cols, "…"))
+		out.WriteString("\x1b[0m")
+		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + 2, action: button.action})
+	}
 }

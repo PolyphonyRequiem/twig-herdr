@@ -16,8 +16,9 @@ import (
 
 const hostCapability = "qualified-attachment-snapshot-v1"
 
-// HostBinding is opaque native authority, not a plugin authentication selector.
-// The CLI owns snapshot qualification and every operation's admission check.
+// HostBinding retains native identity/attachment metadata. Legacy hosts use an
+// opaque qualified snapshot; packaged semantic hosts use a status fingerprint
+// and native expected-origin guards, not a fabricated native snapshot token.
 type HostBinding struct {
 	ProtocolVersion int    `json:"protocolVersion"`
 	Capability      string `json:"capability"`
@@ -28,6 +29,19 @@ type HostBinding struct {
 }
 
 func ReadHostBinding(ctx context.Context, cwd, expected string) (HostBinding, error) {
+	if executable := companionPath(); executable != "twig" {
+		output, err := nativeOutput(ctx, executable, cwd, "connection", "status", "-o", "json")
+		if err != nil {
+			return HostBinding{}, err
+		}
+		binding, err := parseStandaloneBinding(output, expected)
+		if err != nil {
+			return HostBinding{}, err
+		}
+		binding.ProtocolVersion = 1
+		binding.Capability = "semantic-bench-v1"
+		return binding, nil
+	}
 	args := []string{"connection", "host-snapshot", "-o", "json"}
 	if expected != "" {
 		args = boundArgs(args, expected)
@@ -158,6 +172,10 @@ func (rt *runtime) stopForReconnect(err error) {
 	// Drop all prior actor's VT nodes, including scrollback and hidden restore data.
 	// Native proposal files, digests, authorizers and journals remain untouched.
 	rt.reconnectRequired = true
+	rt.cancelPins()
+	rt.browser = browserModel{}
+	rt.hits = nil
+	rt.showBrowserHelp = false
 	rt.cancelSync()
 	rt.reconnectReason = "binding-changed/reconnect: " + safe(err.Error()) + "; Ctrl+R or twig-herdr reconnect acknowledges a fresh runtime"
 	rt.bench.launchGen++
@@ -177,7 +195,7 @@ func (rt *runtime) stopForReconnect(err error) {
 	}
 	rt.admissionActions = nil
 	rt.admissionActionCount = 0
-	for _, sess := range []*session{rt.bench.active, rt.bench.pending, rt.review.session, rt.review.restoreBench} {
+	for _, sess := range []*session{rt.review.session} {
 		if sess != nil {
 			sess.term = nil
 			sess.hasData = false
@@ -190,16 +208,8 @@ func (rt *runtime) stopForReconnect(err error) {
 	}
 	rt.cancelReviewLookup(err)
 	rt.cancelBenchLaunch(err)
-	rt.cancelBenchPending(err)
 	rt.cancelReviewLaunch(err)
 	rt.cancelReviewSession(err)
-	for _, sess := range []*session{rt.bench.active, rt.review.restoreBench} {
-		if sess != nil && sess.cancel != nil {
-			sess.cancel()
-		}
-	}
-	rt.bench.active = nil
-	rt.review.restoreBench = nil
 	rt.review.hasPendingResize = false
 	rt.review.hasPendingDensity = false
 	rt.benchSummary = "unavailable (original binding " + rt.binding.BindingID + ")"
@@ -270,6 +280,8 @@ func (rt *runtime) handleAdmissionResolved(ev event) {
 				rt.beginBenchRefresh(nil, false)
 			case evKey:
 				rt.handleAdmittedKey(action.key)
+			case evMouse:
+				rt.handleAdmittedMouse(action.mouse)
 			case evResize:
 				rt.handleAdmittedResize(action.size)
 			case evRequest:

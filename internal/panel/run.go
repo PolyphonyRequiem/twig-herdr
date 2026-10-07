@@ -3,7 +3,7 @@ package panel
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+
 	"errors"
 	"fmt"
 	"os"
@@ -30,10 +30,6 @@ const (
 type size struct {
 	cols int
 	rows int
-}
-
-type benchSummary struct {
-	Current string `json:"current"`
 }
 
 type runtime struct {
@@ -69,12 +65,19 @@ type runtime struct {
 	syncCancel           context.CancelFunc
 	syncGen              uint64
 
-	benchSummary string
-	offsets      map[string]int
+	benchSummary    string
+	offsets         map[string]int
+	nativePath      string
+	browser         browserModel
+	picker          *pinPicker
+	showBrowserHelp bool
+	overlayOffset   int
+	overlayMax      int
+	hits            []hitTarget
+	pinCancel       context.CancelFunc
+	pinGen          uint64
 
 	bench struct {
-		active       *session
-		pending      *session
 		launchCancel context.CancelFunc
 		launchGen    uint64
 		pendingReply chan Result
@@ -82,7 +85,6 @@ type runtime struct {
 
 	review struct {
 		session           *session
-		restoreBench      *session
 		launchCancel      context.CancelFunc
 		launchGen         uint64
 		pendingReply      chan Result
@@ -100,9 +102,7 @@ type session struct {
 	gen  uint64
 	kind string
 
-	view         string
-	file         string
-	benchSummary string
+	file string
 
 	cols int
 	rows int
@@ -148,19 +148,24 @@ const (
 	evNoticeExpire
 	evAdmissionResolved
 	evSyncDone
+	evMouse
+	evBrowserLoaded
+	evPinDone
 )
 
 type event struct {
 	kind eventKind
 
-	req Request
-	key uv.KeyPressEvent
+	req        Request
+	key        uv.KeyPressEvent
+	mouse      uv.Mouse
+	browser    *BrowserSnapshot
+	syncResult *benchSyncResult
 
 	size size
 
 	session      *session
 	sessionKind  string
-	summary      string
 	data         []byte
 	err          error
 	admissionErr error
@@ -200,6 +205,7 @@ func newRuntime(cfg Config) *runtime {
 	return &runtime{
 		cfg:            cfg,
 		latestProposal: latestProposal,
+		nativePath:     companionPath(),
 		mode:           "bench",
 		benchView:      cfg.InitialView,
 		offsets:        map[string]int{"table": 0, "tree": 0, "review": 0},
@@ -232,7 +238,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 	}
 	rt.binding = binding
 
-	fmt.Fprint(os.Stdout, "\x1b[?1049h\x1b[?25l")
+	fmt.Fprint(os.Stdout, "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
 
 	rt.size = rt.panelSize()
 	rt.draw()
@@ -253,6 +259,12 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleRequest(ev.req)
 			case evKey:
 				rt.handleKey(ev.key)
+			case evMouse:
+				rt.handleMouse(ev.mouse)
+			case evBrowserLoaded:
+				rt.handleBrowserLoaded(ev)
+			case evPinDone:
+				rt.handlePinDone(ev)
 			case evResize:
 				rt.handleResize(ev.size)
 			case evBenchTick:
@@ -269,7 +281,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 			case evSignal:
 				rt.shutdown()
 			case evSessionStarted:
-				rt.handleSessionStarted(ev.session, ev.summary)
+				rt.handleSessionStarted(ev.session)
 			case evSessionData:
 				rt.handleSessionData(ev.session, ev.data)
 			case evSessionExit:
@@ -284,8 +296,8 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleSyncDone(ev)
 			case evNoticeExpire:
 				if rt.noticeSeq == ev.token {
-					rt.admissionActions = append(rt.admissionActions, ev)
-					rt.checkAdmission(nil, false)
+					rt.notice = ""
+					rt.draw()
 				}
 			}
 		case <-rt.ctx.Done():
@@ -338,6 +350,10 @@ func flattenEvent(ev uv.Event) []event {
 	switch k := ev.(type) {
 	case uv.KeyPressEvent:
 		return []event{{kind: evKey, key: k}}
+	case uv.MouseClickEvent:
+		return []event{{kind: evMouse, mouse: uv.Mouse(k)}}
+	case uv.MouseWheelEvent:
+		return []event{{kind: evMouse, mouse: uv.Mouse(k)}}
 	case uv.MultiEvent:
 		var out []event
 		for _, sub := range k {
@@ -459,7 +475,7 @@ func (rt *runtime) handleAdmittedRequest(req Request) {
 }
 
 func (rt *runtime) handleKey(key uv.KeyPressEvent) {
-	if key.MatchString("q", "ctrl+c") {
+	if key.MatchString("ctrl+c") {
 		rt.shutdown()
 		return
 	}
@@ -468,11 +484,23 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 		return
 	}
 	if rt.reconnectRequired {
-		rt.draw()
+		if key.MatchString("q") {
+			rt.shutdown()
+		} else {
+			rt.draw()
+		}
 		return
 	}
-	if rt.cfg.Standalone && (key.MatchString("j", "k", "up", "down", "pgup", "pgdown", "home", "end") ||
-		(rt.mode == "review" && key.MatchString("d", "b", "r"))) {
+	if rt.mode == "bench" && rt.handleBrowserKey(key) {
+		return
+	}
+	if key.MatchString("q") {
+		rt.shutdown()
+		return
+	}
+	// Local navigation and captured review density never wait on a subprocess.
+	if (rt.mode == "bench" && key.MatchString("1", "2")) ||
+		(rt.cfg.Standalone && rt.mode == "review" && key.MatchString("j", "k", "up", "down", "pgup", "pgdown", "home", "end", "d", "b", "r")) {
 		rt.handleAdmittedKey(key)
 		return
 	}
@@ -535,14 +563,22 @@ func (rt *runtime) handleAdmittedKey(key uv.KeyPressEvent) {
 
 	if key.MatchString("1") {
 		rt.benchView = "table"
+		rt.cancelQueuedViews()
 		rt.cancelReviewLookup(errors.New("Review superseded by Table view"))
-		rt.beginBenchRefresh(nil, true)
+		rt.browser.dirty = true
+		rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+		rt.ensureSelectionVisible()
+		rt.draw()
 		return
 	}
 	if key.MatchString("2") {
 		rt.benchView = "tree"
+		rt.cancelQueuedViews()
 		rt.cancelReviewLookup(errors.New("Review superseded by Tree view"))
-		rt.beginBenchRefresh(nil, true)
+		rt.browser.dirty = true
+		rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+		rt.ensureSelectionVisible()
+		rt.draw()
 		return
 	}
 	if key.MatchString("3") {
@@ -564,6 +600,28 @@ func (rt *runtime) handleAdmittedKey(key uv.KeyPressEvent) {
 		return
 	}
 	rt.handleScroll(rt.benchView, key)
+}
+
+// Local view choices supersede older queued choices as well as live lookups.
+// Keep the in-flight admission prefix aligned while removing superseded events.
+func (rt *runtime) cancelQueuedViews() {
+	prefix := rt.admissionActionCount
+	kept := rt.admissionActions[:0]
+	for i, action := range rt.admissionActions {
+		viewKey := action.kind == evKey && action.key.MatchString("1", "2", "3")
+		viewRequest := action.kind == evRequest && (action.req.Command == "view" || action.req.Command == "review")
+		if viewKey || viewRequest {
+			if i < prefix {
+				rt.admissionActionCount--
+			}
+			if viewRequest {
+				rt.reply(action.req.Reply, Result{Snapshot: rt.snapshot(), Err: errors.New("view selection superseded")})
+			}
+			continue
+		}
+		kept = append(kept, action)
+	}
+	rt.admissionActions = kept
 }
 
 func (rt *runtime) handleScroll(key string, ev uv.KeyPressEvent) {
@@ -598,7 +656,7 @@ func (rt *runtime) handleScroll(key string, ev uv.KeyPressEvent) {
 }
 
 func (rt *runtime) handleResize(next size) {
-	if !rt.reconnectRequired {
+	if rt.mode == "review" && !rt.reconnectRequired && !rt.cfg.Standalone {
 		rt.admissionActions = append(rt.admissionActions, event{kind: evResize, size: next})
 		rt.checkAdmission(nil, false)
 		return
@@ -625,7 +683,9 @@ func (rt *runtime) handleAdmittedResize(next size) {
 		return
 	}
 	if rt.mode == "bench" {
-		rt.beginBenchRefresh(nil, true)
+		rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+		rt.ensureSelectionVisible()
+		rt.draw()
 	}
 }
 
@@ -657,24 +717,26 @@ func (rt *runtime) beginBenchRefresh(reply chan Result, force bool) {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New("sync is in progress")})
 		return
 	}
-	if rt.closing || rt.mode == "review" {
+	if rt.pinCancel != nil {
+		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New("pin change is in progress")})
 		return
 	}
-	if !force && (rt.bench.launchCancel != nil || rt.bench.pending != nil) {
+	if rt.closing {
+		return
+	}
+	if !force && rt.bench.launchCancel != nil {
 		return
 	}
 	rt.cancelBenchLaunch(errors.New("superseded by a newer refresh"))
-	rt.cancelBenchPending(errors.New("superseded by a newer refresh"))
 	rt.bench.pendingReply = reply
 
 	gen := rt.nextBenchGen()
 	rt.bench.launchGen = gen
-	cols, rows := rt.contentSize()
-	ctx, cancel := context.WithCancel(rt.ctx)
+	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
 	rt.bench.launchCancel = cancel
-	go rt.launchBench(ctx, cancel, gen, rt.benchView, rt.binding.Snapshot, cols, rows)
+	go rt.launchBrowser(ctx, gen, rt.binding)
 
-	if rt.bench.active == nil {
+	if rt.browser.snapshot == nil {
 		rt.draw()
 	}
 }
@@ -767,15 +829,13 @@ func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing
 		return
 	}
 
-	rt.review.restoreBench = rt.bench.active
+	rt.picker = nil
+	rt.showBrowserHelp = false
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("review opened"))
-	rt.cancelBenchPending(errors.New("review opened"))
 	rt.cancelReviewLaunch(errors.New("review reopened"))
 	rt.cancelReviewSession(errors.New("review reopened"))
 
-	rt.bench.active = nil
-	rt.bench.pending = nil
 	rt.mode = "review"
 	rt.reviewFile = abs
 	rt.review.hasPendingResize = false
@@ -811,29 +871,10 @@ func (rt *runtime) beginExitReview(reply chan Result) {
 	rt.review.hasPendingResize = false
 	rt.review.pendingResize = size{}
 	rt.review.hasPendingDensity = false
-	rt.review.restoreBench = nil
 	rt.reviewFile = ""
 	rt.mode = "bench"
 	rt.setNotice("Returned to bench view", 1000)
 	rt.beginBenchRefresh(reply, true)
-}
-
-func (rt *runtime) launchBench(ctx context.Context, cancel context.CancelFunc, gen uint64, view, snapshot string, cols, rows int) {
-	summary, err := rt.loadBenchSummary(ctx, snapshot)
-	if err != nil {
-		cancel()
-		rt.emit(event{kind: evLaunchFailed, sessionKind: "bench", token: gen, err: err})
-		return
-
-	}
-	sess, err := rt.startSession(ctx, cancel, gen, "bench", boundArgs([]string{"workspace", "--view", view}, snapshot), "", rt.cfg.Cwd, snapshot, cols, rows)
-	if err != nil {
-		cancel()
-		rt.emit(event{kind: evLaunchFailed, sessionKind: "bench", token: gen, err: err})
-		return
-	}
-	sess.view = view
-	rt.emit(event{kind: evSessionStarted, session: sess, summary: summary})
 }
 
 func (rt *runtime) launchReview(ctx context.Context, cancel context.CancelFunc, gen uint64, file, digest, cwd, snapshot string, cols, rows int) {
@@ -963,58 +1004,37 @@ func (rt *runtime) waitSession(ctx context.Context, sess *session, cwd, snapshot
 	rt.emit(event{kind: evSessionExit, session: sess, err: err, admissionErr: admissionErr})
 }
 
-func (rt *runtime) handleSessionStarted(sess *session, summary string) {
+func (rt *runtime) handleSessionStarted(sess *session) {
 	if sess == nil || rt.closing {
 		return
 	}
-	switch sess.kind {
-	case "bench":
-		if sess.gen != rt.bench.launchGen {
-			close(sess.started)
-			if sess.cancel != nil {
-				sess.cancel()
-			}
-			return
-		}
-		rt.bench.pending = sess
+	if sess.gen != rt.review.launchGen {
 		close(sess.started)
-		rt.bench.launchCancel = nil
-		if rt.cfg.Standalone {
-			sess.benchSummary = summary
-		} else if summary != "" {
-			rt.benchSummary = summary
+		if sess.cancel != nil {
+			sess.cancel()
 		}
-		rt.draw()
-	case "review":
-		if sess.gen != rt.review.launchGen {
-			close(sess.started)
-			if sess.cancel != nil {
-				sess.cancel()
-			}
-			return
-		}
-		rt.review.launchCancel = nil
-		rt.review.restoreBench = nil
-		rt.review.session = sess
-		if rt.review.hasPendingResize {
-			sess.pendingResize = rt.review.pendingResize
-			sess.hasPendingResize = true
-			sess.pendingDensity = sess.currentDensity()
-			sess.hasPendingDensity = true
-			rt.review.hasPendingResize = false
-			rt.review.pendingResize = size{}
-		}
-		if rt.review.hasPendingDensity {
-			sess.pendingDensity = rt.review.pendingDensity
-			sess.hasPendingDensity = true
-			rt.review.hasPendingDensity = false
-			rt.review.pendingDensity = ""
-		}
-		close(sess.started)
-		rt.mode = "review"
-		rt.reviewFile = sess.file
-		rt.draw()
+		return
 	}
+	rt.review.launchCancel = nil
+	rt.review.session = sess
+	if rt.review.hasPendingResize {
+		sess.pendingResize = rt.review.pendingResize
+		sess.hasPendingResize = true
+		sess.pendingDensity = sess.currentDensity()
+		sess.hasPendingDensity = true
+		rt.review.hasPendingResize = false
+		rt.review.pendingResize = size{}
+	}
+	if rt.review.hasPendingDensity {
+		sess.pendingDensity = rt.review.pendingDensity
+		sess.hasPendingDensity = true
+		rt.review.hasPendingDensity = false
+		rt.review.pendingDensity = ""
+	}
+	close(sess.started)
+	rt.mode = "review"
+	rt.reviewFile = sess.file
+	rt.draw()
 }
 
 func (rt *runtime) handleSessionData(sess *session, data []byte) {
@@ -1028,9 +1048,8 @@ func (rt *runtime) handleSessionData(sess *session, data []byte) {
 		return
 	}
 	if rt.cfg.Standalone {
-		if sess.kind == "bench" || sess.observationAdmitted {
-			// Bench output stays in the hidden pending VT until the post-exit
-			// status check. Review density changes reuse an admitted observation.
+		if sess.observationAdmitted {
+			// Review density changes reuse the admitted observation.
 			rt.handleAdmittedSessionData(sess, data)
 			return
 		}
@@ -1088,7 +1107,7 @@ func (rt *runtime) handleSessionExit(sess *session, err, admissionErr error) {
 	if sess == nil || rt.closing || sess.exited {
 		return
 	}
-	if !rt.sessionMatches(sess) && rt.review.session != sess && rt.bench.pending != sess {
+	if !rt.sessionMatches(sess) && rt.review.session != sess {
 		return
 	}
 	if admissionErr != nil {
@@ -1102,28 +1121,6 @@ func (rt *runtime) handleSessionExit(sess *session, err, admissionErr error) {
 	sess.pty = nil
 	sess.cmd = nil
 	sess.cancel = nil
-	if sess.kind == "bench" {
-		if rt.bench.pending != sess {
-			return
-		}
-		rt.bench.active = sess
-		rt.bench.pending = nil
-		if rt.cfg.Standalone && sess.benchSummary != "" {
-			rt.benchSummary = sess.benchSummary
-		}
-		if err != nil {
-			rt.setError(fmt.Sprintf("Twig workspace exited with code %s", exitReason(err)))
-		} else if strings.HasPrefix(rt.notice, "Twig bench refresh failed") || strings.HasPrefix(rt.notice, "Twig workspace exited") {
-			rt.notice = ""
-		}
-		if rt.bench.pendingReply != nil {
-			reply := rt.bench.pendingReply
-			rt.bench.pendingReply = nil
-			rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
-		}
-		rt.draw()
-		return
-	}
 	if rt.review.session != sess {
 		return
 	}
@@ -1149,7 +1146,7 @@ func (rt *runtime) handleLaunchFailed(kind string, gen uint64, err error) {
 		if gen != rt.bench.launchGen {
 			return
 		}
-		rt.bench.launchCancel = nil
+		rt.cancelBenchLaunch(nil)
 		if rt.bench.pendingReply != nil {
 			reply := rt.bench.pendingReply
 			rt.bench.pendingReply = nil
@@ -1174,15 +1171,12 @@ func (rt *runtime) restoreBenchAfterReviewFailure(err error) {
 	rt.mode = "bench"
 	reply := rt.review.pendingReply
 	rt.review.pendingReply = nil
-	if rt.review.restoreBench != nil {
-		rt.bench.active = rt.review.restoreBench
-		rt.review.restoreBench = nil
+	if rt.browser.snapshot != nil {
 		rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
 		rt.draw()
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
 		return
 	}
-	rt.review.restoreBench = nil
 	rt.setError(fmt.Sprintf("Review failed to start: %s", safe(err.Error())))
 	rt.draw()
 	rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
@@ -1281,43 +1275,7 @@ func consumeReviewEcho(sess *session, data []byte) []byte {
 }
 
 func (rt *runtime) sessionMatches(sess *session) bool {
-	if sess == nil || sess.exited {
-		return false
-	}
-	switch sess.kind {
-	case "bench":
-		if rt.bench.pending == sess {
-			return sess.gen == rt.bench.launchGen
-		}
-		return rt.bench.pending == nil && rt.bench.launchCancel == nil && rt.bench.active == sess && sess.gen == rt.bench.launchGen
-	case "review":
-		return rt.review.session == sess && sess.gen == rt.review.launchGen
-	default:
-		return false
-	}
-}
-
-func (rt *runtime) loadBenchSummary(ctx context.Context, snapshot string) (string, error) {
-	loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(loadCtx, "twig", boundArgs([]string{"bench", "list", "-o", "json"}, snapshot)...)
-	cmd.Dir = rt.cfg.Cwd
-	cmd.Env = os.Environ()
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if loadCtx.Err() != nil {
-			return "", loadCtx.Err()
-		}
-		return "", fmt.Errorf("twig bench list -o json: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	var summary benchSummary
-	if err := json.Unmarshal(output, &summary); err != nil {
-		return "", fmt.Errorf("parse bench summary: %w", err)
-	}
-	if summary.Current == "" {
-		return "loading", nil
-	}
-	return summary.Current, nil
+	return sess != nil && !sess.exited && sess.kind == "review" && rt.review.session == sess && sess.gen == rt.review.launchGen
 }
 
 func (rt *runtime) resolveFile(file string) (string, error) {
@@ -1347,12 +1305,6 @@ func (rt *runtime) panelSize() size {
 	if err != nil || cols <= 0 || rows <= 0 {
 		return size{cols: 80, rows: 24}
 	}
-	if cols < 20 {
-		cols = 20
-	}
-	if rows < 3 {
-		rows = 3
-	}
 	return size{cols: cols, rows: rows}
 }
 
@@ -1373,11 +1325,7 @@ func (rt *runtime) contentVisibleRows() int {
 }
 
 func (rt *runtime) contentCols() int {
-	cols := rt.size.cols
-	if cols < 20 {
-		cols = 20
-	}
-	return cols
+	return max(rt.size.cols, 1)
 }
 
 func (rt *runtime) snapshot() Snapshot {
@@ -1388,7 +1336,7 @@ func (rt *runtime) snapshot() Snapshot {
 	if rt.mode == "review" {
 		ready = rt.review.session != nil && rt.review.session.ready
 	} else {
-		ready = rt.bench.active != nil && rt.bench.active.hasData && rt.bench.active.view == rt.benchView
+		ready = rt.browser.snapshot != nil
 	}
 	return Snapshot{
 		Mode:       rt.mode,
@@ -1450,20 +1398,6 @@ func (rt *runtime) cancelBenchLaunch(err error) {
 	}
 }
 
-func (rt *runtime) cancelBenchPending(err error) {
-	if rt.bench.pending != nil {
-		if rt.bench.pending.cancel != nil {
-			rt.bench.pending.cancel()
-		}
-		rt.bench.pending = nil
-	}
-	if err != nil && rt.bench.pendingReply != nil {
-		reply := rt.bench.pendingReply
-		rt.bench.pendingReply = nil
-		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: err})
-	}
-}
-
 func (rt *runtime) cancelReviewLookup(err error) {
 	if rt.review.lookupCancel != nil {
 		rt.review.lookupCancel()
@@ -1507,7 +1441,8 @@ func (rt *runtime) maxOffsetForCurrentSession() int {
 	if rt.mode == "review" {
 		return maxOffset(rt.review.session, rt.contentVisibleRows())
 	}
-	return maxOffset(rt.bench.active, rt.contentVisibleRows())
+	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+	return max(len(rt.browser.lines)-rt.contentVisibleRows(), 0)
 }
 
 func maxOffset(sess *session, visibleRows int) int {
@@ -1524,16 +1459,9 @@ func maxOffset(sess *session, visibleRows int) int {
 	return total - visibleRows
 }
 
-func exitReason(err error) string {
-	if err == nil {
-		return "0"
-	}
-	return safe(err.Error())
-}
-
 func safe(text string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return ' '
 		}
 		return r
@@ -1543,12 +1471,12 @@ func safe(text string) string {
 func (rt *runtime) shutdown() {
 	rt.onceShutdown(func() {
 		rt.closing = true
+		rt.cancelPins()
 		if rt.admissionCancel != nil {
 			rt.admissionCancel()
 		}
 		rt.cancelReviewLookup(errors.New("panel closed"))
 		rt.cancelBenchLaunch(nil)
-		rt.cancelBenchPending(nil)
 		rt.cancelReviewLaunch(nil)
 		rt.cancelReviewSession(nil)
 		if rt.cancel != nil {
@@ -1558,7 +1486,7 @@ func (rt *runtime) shutdown() {
 			_ = term.Restore(os.Stdin.Fd(), rt.rawState)
 			rt.rawState = nil
 		}
-		fmt.Fprint(os.Stdout, "\x1b[0m\x1b[?25h\x1b[?1049l")
+		fmt.Fprint(os.Stdout, "\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?25h\x1b[?1049l")
 		close(rt.done)
 	})
 }

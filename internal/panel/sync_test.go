@@ -26,7 +26,9 @@ func TestSyncKeepsCapturedReviewInBothBrowsers(t *testing.T) {
 			rt.review.session = sess
 			rt.syncCancel = func() {}
 			rt.syncGen = 1
-			output := captureStdout(t, func() { rt.handleSyncDone(event{token: 1}) })
+			output := captureStdout(t, func() {
+				rt.handleSyncDone(event{token: 1, syncResult: &benchSyncResult{Kind: "benchSync", BenchID: "bench", BenchName: "My Bench", ItemCount: 12, MemberCount: 8, RelationshipCount: 4, ProtectedCount: 2}})
+			})
 			if !strings.Contains(output, "ORIGINAL CAPTURED REVIEW") || rt.review.session != sess || rt.snapshot().ReviewFile != "original-proposal.json" || !rt.snapshot().Ready {
 				t.Fatal("sync replaced or invalidated the captured proposal review")
 			}
@@ -59,5 +61,24 @@ func TestCanceledSyncCompletionCannotReviveOldReview(t *testing.T) {
 	output := captureStdout(t, func() { rt.handleSyncDone(event{token: 1}) })
 	if output != "" || rt.snapshot().Ready {
 		t.Fatal("canceled sync completion changed the browser")
+	}
+}
+
+func TestBenchSyncResultRefusesAnotherBench(t *testing.T) {
+	output := []byte(`{"kind":"benchSync","benchId":"other-bench","benchName":"Other","itemCount":3,"memberCount":2,"relationshipCount":1,"protectedCount":0}`)
+	if _, err := parseBenchSyncResult(output, "captured-bench"); err == nil {
+		t.Fatal("a sync response for another Bench was accepted as the captured Bench's pull")
+	}
+}
+
+func TestBenchSyncResultRequiresReportedNonnegativeCounts(t *testing.T) {
+	for _, output := range []string{
+		`{"kind":"benchSync","benchId":"bench","itemCount":3,"memberCount":2,"relationshipCount":1,"protectedCount":-1}`,
+		`{"kind":"benchSync","benchId":"bench","itemCount":3,"memberCount":2,"protectedCount":0}`,
+		`{"kind":"benchSync","benchId":"bench","itemCount":3,"memberCount":2,"relationshipCount":2,"protectedCount":0}`,
+	} {
+		if _, err := parseBenchSyncResult([]byte(output), "bench"); err == nil {
+			t.Fatal("negative or unreported sync counts were accepted")
+		}
 	}
 }

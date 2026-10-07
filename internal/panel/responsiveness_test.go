@@ -10,18 +10,22 @@ import (
 	vt "github.com/charmbracelet/x/vt"
 )
 
-func TestStandaloneScrollRespondsWhileConnectionCheckIsPending(t *testing.T) {
-	rt := newRuntime(Config{Cwd: t.TempDir(), InitialView: "tree", Standalone: true})
-	rt.size = size{cols: 80, rows: 8}
-	rt.ctx = context.Background()
-	rt.admissionCancel = func() {}
-	rt.admissionActions = []event{{kind: evBenchTick}}
-	sess := &session{kind: "bench", view: "tree", term: vt.NewEmulator(80, 40), hasData: true}
-	_, _ = sess.term.Write([]byte("FIRST ROW\r\nSECOND ROW\r\nTHIRD ROW\r\nFOURTH ROW\r\n"))
-	rt.bench.active = sess
-	output := captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'j', Text: "j"}) })
-	if rt.offsets["tree"] != 1 || !strings.Contains(output, "SECOND ROW") || strings.Contains(output, "FIRST ROW") {
-		t.Fatal("local scrolling waited for connection admission instead of showing the next row")
+func TestBenchSelectionRespondsWhileConnectionCheckIsPending(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		rt := newRuntime(Config{Cwd: t.TempDir(), InitialView: "tree", Standalone: standalone})
+		rt.size = size{cols: 80, rows: 8}
+		rt.ctx = context.Background()
+		rt.admissionCancel = func() {}
+		rt.admissionActions = []event{{kind: evBenchTick}}
+		rt.browser.replace(&BrowserSnapshot{BenchID: "bench", Roots: []*BrowserNode{{Key: "1", ID: 1, Label: "FIRST ROW"}, {Key: "2", ID: 2, Label: "SECOND ROW"}}})
+		captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'j', Text: "j"}) })
+		if rt.browser.selectedID != 2 {
+			t.Fatal("local selection waited for connection admission")
+		}
+		captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'p', Text: "p"}) })
+		if rt.picker == nil || rt.picker.node.ID != 2 {
+			t.Fatal("local pin picker waited for connection admission")
+		}
 	}
 }
 
@@ -63,32 +67,28 @@ func TestStandaloneReviewPublishesOnlyAfterCompleteObservationAdmission(t *testi
 	}
 }
 
-func TestStandaloneBenchHidesNewSummaryAndOutputUntilExitAdmission(t *testing.T) {
+func TestBenchPublishesOnlyAfterCompleteNativeOriginVerification(t *testing.T) {
 	for _, changed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "admitted", true: "connection changed"}[changed], func(t *testing.T) {
-			rt := newRuntime(Config{Cwd: t.TempDir(), InitialView: "tree", Standalone: true})
+			cwd := t.TempDir()
+			rt := newRuntime(Config{Cwd: cwd, InitialView: "tree", Standalone: true})
 			rt.ctx = context.Background()
 			rt.size = size{cols: 100, rows: 12}
+			rt.binding = HostBinding{BindingID: "binding", IdentityID: "identity", WorktreeRoot: cwd}
 			rt.benchSummary = "ORIGINAL BENCH"
-			sess := &session{kind: "bench", view: "tree", term: vt.NewEmulator(100, 20), started: make(chan struct{})}
-			output := captureStdout(t, func() {
-				rt.handleSessionStarted(sess, "NEW PRIVATE BENCH")
-				rt.handleSessionData(sess, []byte("NEW PRIVATE OUTPUT\r\n"))
-			})
-			if strings.Contains(output, "NEW PRIVATE") || rt.snapshot().Ready {
-				t.Fatal("pending bench data or metadata was published before admission")
-			}
+			rt.bench.launchGen = 1
+			snapshot := &BrowserSnapshot{BenchID: "bench", BenchName: "NEW PRIVATE BENCH", BindingID: "binding", IdentityID: "identity", WorktreeRoot: cwd, Roots: []*BrowserNode{{Key: "1", ID: 1, Label: "NEW PRIVATE OUTPUT"}}}
 			var admissionErr error
 			if changed {
 				admissionErr = errors.New("binding-changed/reconnect: actor changed")
 			}
-			output = captureStdout(t, func() { rt.handleSessionExit(sess, nil, admissionErr) })
+			output := captureStdout(t, func() { rt.handleBrowserLoaded(event{token: 1, browser: snapshot, admissionErr: admissionErr}) })
 			if changed {
 				if strings.Contains(output, "NEW PRIVATE") || !rt.snapshot().ReconnectRequired || rt.snapshot().Ready {
-					t.Fatal("changed actor's bench was published instead of clearing retained data")
+					t.Fatal("changed actor's Bench was published")
 				}
 			} else if !strings.Contains(output, "NEW PRIVATE BENCH") || !strings.Contains(output, "NEW PRIVATE OUTPUT") || !rt.snapshot().Ready {
-				t.Fatal("qualified bench summary and output were not published together")
+				t.Fatal("verified native Bench metadata and rows were not published together")
 			}
 		})
 	}
