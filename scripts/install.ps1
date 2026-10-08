@@ -131,7 +131,11 @@ try {
         if ($_ -match "^([0-9a-fA-F]{64}) [ *]$([regex]::Escape($asset))$") { $Matches[1].ToLowerInvariant() }
     })
     if ($hashes.Count -ne 1) { Fail "expected exactly one SHA256SUMS entry for $asset" }
-    if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hashes[0]) { Fail "checksum mismatch for $asset; installation unchanged" }
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $inputStream = [System.IO.File]::OpenRead($archive)
+    try { $actualHash = [BitConverter]::ToString($algorithm.ComputeHash($inputStream)).Replace('-', '').ToLowerInvariant() }
+    finally { $inputStream.Dispose(); $algorithm.Dispose() }
+    if ($actualHash -ne $hashes[0]) { Fail "checksum mismatch for $asset; installation unchanged" }
 
     $stage = Join-Path $Temporary 'bundle'
     [System.IO.Directory]::CreateDirectory($stage) | Out-Null

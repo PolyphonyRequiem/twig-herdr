@@ -3,6 +3,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Coordinated browser version
+        required: true
+        default: "0.3.0"
+      publish:
+        description: Publish only after signed-artifact verification
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,6 +31,9 @@ jobs:
   build:
     name: build and verify ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -67,7 +80,7 @@ jobs:
         id: release
         run: >-
           python scripts/release.py prepare
-          --tag "$env:GITHUB_REF_NAME"
+          --tag "${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}"
           --github-output "$env:GITHUB_OUTPUT"
           --github-env "$env:GITHUB_ENV"
       - name: Check out private companion source at exact commit
@@ -131,6 +144,41 @@ jobs:
           dotnet publish src/Twig/Twig.csproj -c Release -r ${{ matrix.rid }}
           --self-contained true -p:PublishAot=true -p:PublishTrimmed=true -p:StripSymbols=true
           -o ../build/native
+      - name: Require Windows signing configuration
+        if: matrix.goos == 'windows'
+        env:
+          AZURE_SIGNING_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          AZURE_SIGNING_TENANT_ID: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+          AZURE_SIGNING_SUBSCRIPTION_ID: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+        run: |
+          foreach ($name in @('AZURE_SIGNING_CLIENT_ID', 'AZURE_SIGNING_TENANT_ID', 'AZURE_SIGNING_SUBSCRIPTION_ID')) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing required signing configuration: $name" }
+          }
+      - name: Azure login for existing Trusted Signing identity
+        if: matrix.goos == 'windows'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+      - name: Sign both browsers and the private native companion
+        if: matrix.goos == 'windows'
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          endpoint: https://wus2.codesigning.azure.net/
+          trusted-signing-account-name: polyphonyrequiem
+          certificate-profile-name: public-trust
+          files-folder: ${{ github.workspace }}/build
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Verify Windows publisher and timestamp before packaging
+        if: matrix.goos == 'windows'
+        run: >-
+          pwsh -NoProfile -File scripts/verify-windows-signatures.ps1
+          -FrontendDirectory build/frontends -NativeDirectory build/native
       - name: Smoke and package both complete portable bundles
         run: >-
           python scripts/release.py package
@@ -154,6 +202,7 @@ jobs:
   publish:
     name: publish complete coordinated release
     needs: build
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -164,7 +213,7 @@ jobs:
           python-version: "3.12"
       - name: Verify coordinated release version
         id: release
-        run: python scripts/release.py prepare --tag "$GITHUB_REF_NAME" --github-output "$GITHUB_OUTPUT"
+        run: python scripts/release.py prepare --tag "${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}" --github-output "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -179,5 +228,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           python scripts/release.py publish
-          --tag "$GITHUB_REF_NAME" --repository "$GITHUB_REPOSITORY"
+          --tag 'v${{ steps.release.outputs.version }}' --repository "$GITHUB_REPOSITORY"
           --commit "$GITHUB_SHA" --directory release
