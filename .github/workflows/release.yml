@@ -102,49 +102,6 @@ jobs:
           dotnet-version: ${{ steps.release.outputs.dotnet_sdk }}
       - name: Verify native source and SDK selection
         run: python scripts/release.py verify-native --source native-source
-      - name: Go suite on target host
-        run: go test ./...
-      - name: Native browser, pin, lifecycle, sync and admission regressions
-        working-directory: native-source
-        run: >-
-          dotnet test tests/Twig.Cli.Tests/Twig.Cli.Tests.csproj -c Release
-          --filter 'FullyQualifiedName~WorkspaceCommandTests|FullyQualifiedName~BenchCommandTests|FullyQualifiedName~BenchConfigurationCommandTests|FullyQualifiedName~BenchSyncCommandTests|FullyQualifiedName~TrackingCommandTests|FullyQualifiedName~ConnectionBindingReadTests|FullyQualifiedName~PatConnectionBindingReadTests|FullyQualifiedName~ConnectionBindingTransitionConsumerTests'
-          --logger 'trx;LogFileName=bench-cli.trx'
-          --results-directory ../validation
-      - name: Native Bench persistence, mutation and connection regressions
-        working-directory: native-source
-        run: >-
-          dotnet test tests/Twig.Infrastructure.Tests/Twig.Infrastructure.Tests.csproj -c Release
-          --filter 'FullyQualifiedName~Bench|FullyQualifiedName~Connection'
-          --logger 'trx;LogFileName=bench-infrastructure.trx'
-          --results-directory ../validation
-      - name: Native membership and current Bench regressions
-        working-directory: native-source
-        run: >-
-          dotnet test tests/Twig.Domain.Tests/Twig.Domain.Tests.csproj -c Release
-          --filter 'FullyQualifiedName~Bench|FullyQualifiedName~WorkingSetFollowsCurrentBenchTests'
-          --logger 'trx;LogFileName=bench-domain.trx'
-          --results-directory ../validation
-      - name: Build Herdr extension
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: >-
-          go build -trimpath -ldflags "-s -w -X main.version=${{ steps.release.outputs.version }}"
-          -o "build/frontends/twig-herdr${{ matrix.ext }}" .
-      - name: Build standalone Bench TUI
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: >-
-          go build -trimpath -ldflags "-s -w -X main.version=${{ steps.release.outputs.version }}"
-          -o "build/frontends/twig-bench-tui${{ matrix.ext }}" ./cmd/twig-bench-tui
-      - name: Publish private native companion and SQLite dependency
-        working-directory: native-source
-        run: >-
-          dotnet publish src/Twig/Twig.csproj -c Release -r ${{ matrix.rid }}
-          --self-contained true -p:PublishAot=true -p:PublishTrimmed=true -p:StripSymbols=true
-          -o ../build/native
       - name: Require Windows signing configuration
         if: matrix.goos == 'windows'
         env:
@@ -162,6 +119,40 @@ jobs:
           client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+      - name: Go suite on target host
+        run: go test ./...
+      - name: Build native release regression assemblies
+        working-directory: native-source
+        run: |
+          foreach ($suite in @('Cli', 'Infrastructure', 'Domain')) {
+            dotnet build "tests/Twig.$suite.Tests/Twig.$suite.Tests.csproj" -c Release
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Native browser, Bench, binding and admission regressions
+        run: python scripts/run-native-regressions.py --source native-source
+      - name: Build Herdr extension
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: >-
+          go build -trimpath -ldflags "-s -w -X main.version=${{ steps.release.outputs.version }}"
+          -o "build/frontends/twig-herdr${{ matrix.ext }}" .
+      - name: Build standalone Bench TUI
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: >-
+          go build -trimpath -ldflags "-s -w -X main.version=${{ steps.release.outputs.version }}"
+          -o "build/frontends/twig-bench-tui${{ matrix.ext }}" ./cmd/twig-bench-tui
+      - name: Publish private native companion and SQLite dependency
+        working-directory: native-source
+        run: |
+          $linkerOptions = @()
+          if ('${{ matrix.rid }}' -eq 'osx-x64') {
+            # The preview SDK selects classic ld on Xcode 15/16; use Apple's current linker.
+            $linkerOptions = @('-p:UseLdClassicXCodeLinker=false')
+          }
+          dotnet publish src/Twig/Twig.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true -p:PublishTrimmed=true -p:StripSymbols=true -o ../build/native @linkerOptions
       - name: Sign both browsers and the private native companion
         if: matrix.goos == 'windows'
         uses: azure/trusted-signing-action@v0.5.1
@@ -191,7 +182,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: validation-${{ matrix.platform }}
-          path: validation/*.trx
+          path: |
+            native-source/artifacts/test-logs/ci/
+            native-source/artifacts/trace-311/
           if-no-files-found: warn
       - name: Upload verified platform assets
         uses: actions/upload-artifact@v4
