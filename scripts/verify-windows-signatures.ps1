@@ -1,10 +1,10 @@
 param(
     [Parameter(Mandatory = $true)][string]$FrontendDirectory,
-    [Parameter(Mandatory = $true)][string]$NativeDirectory,
-    [string]$ExpectedPublisher = 'CN=Daniel Green, O=Daniel Green, L=Kirkland, S=wa, C=US'
+    [Parameter(Mandatory = $true)][string]$NativeDirectory
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$ExpectedPublisher = 'CN=Daniel Green, O=Daniel Green, L=Kirkland, S=wa, C=US'
 $frontend = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($FrontendDirectory)
 $native = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($NativeDirectory)
 $files = @(
