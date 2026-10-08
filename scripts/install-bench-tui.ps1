@@ -30,6 +30,10 @@ function Assert-BenchCompanion([string]$Path) {
     if ($LASTEXITCODE -ne 0 -or $DeleteHelp -notmatch '--expect-bench' -or $DeleteHelp -notmatch '--expect-contents') {
         throw 'Native companion must support target-ID and contents-digest guarded bench deletion. Publish the updated Twig source first.'
     }
+    $DetailHelp = & $Path bench detail --help 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or $DetailHelp -notmatch '--sync') {
+        throw 'Native companion must support cache-only Show detail and explicit selected-item --sync. Publish the updated Twig source first.'
+    }
     if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Path) 'e_sqlite3.dll') -PathType Leaf)) {
         throw 'Native companion must include its e_sqlite3.dll dependency.'
     }

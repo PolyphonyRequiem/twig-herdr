@@ -20,6 +20,8 @@ SELECTIONS = {
         "PatConnectionBindingReadTests", "ConnectionBindingTransitionConsumerTests",
         "BenchDetailCommandTests", "BenchAreaCandidatesCommandTests", "RichHtmlRendererTests",
         "FormatterHelpersTests", "ProgressiveHelpTests",
+        "BuildStatusViewDescriptionTests", "BuildStatusViewCacheAgeTests",
+        "ShowCommandTests", "TreeStatusShowWidthTests",
     ),
     "Infrastructure": ("Bench", "Connection"),
     "Domain": ("Bench", "WorkingSetFollowsCurrentBenchTests"),

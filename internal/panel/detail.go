@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// DetailDocument is the native, cache-only rich presentation. ANSI is generated
-// by Twig, not by source HTML. Only SGR styling and line breaks are admitted.
+// DetailDocument is the native rich presentation, read from cache unless the
+// viewer explicitly requests sync. Only SGR styling and line breaks are admitted.
 type DetailDocument struct {
 	Version    int    `json:"version"`
 	BenchID    string `json:"benchId"`
@@ -26,6 +26,15 @@ type DetailDocument struct {
 	ANSI       string `json:"ansi"`
 }
 
+type detailAction uint8
+
+const (
+	detailRead detailAction = iota
+	detailRefresh
+	detailSync
+	detailReflow
+)
+
 type detailState struct {
 	active      bool
 	id          int
@@ -36,6 +45,7 @@ type detailState struct {
 	gen         uint64
 	cancel      context.CancelFunc
 	loading     bool
+	action      detailAction
 	err         error
 	document    *DetailDocument
 	lines       []string
@@ -118,26 +128,52 @@ func (rt *runtime) openDetail() {
 }
 
 func (rt *runtime) requestDetail() {
+	action := detailRead
+	if rt.detail.document != nil || rt.detail.err != nil {
+		action = detailRefresh
+	}
+	rt.requestDetailAction(action)
+}
+
+func (rt *runtime) requestDetailSync() {
+	rt.requestDetailAction(detailSync)
+}
+
+func (rt *runtime) detailActionBusy() bool {
+	return rt.detail.active && rt.detail.loading
+}
+
+func (rt *runtime) requestDetailAction(action detailAction) {
 	detail := &rt.detail
 	if !detail.active || rt.closing || rt.reconnectRequired {
 		return
 	}
-	if detail.cancel != nil {
-		detail.cancel()
+	rt.reconcileDetail()
+	if !detail.active || rt.detailActionBusy() {
+		// Gestures during a read are refused, not queued. In particular, resize
+		// or R must never cancel or replay an admitted network sync.
+		return
+	}
+	if action == detailSync && detail.id < 0 {
+		detail.action = action
+		detail.err = errors.New("unpublished seeds have no remote item to sync; R refreshes their cached detail")
+		return
 	}
 	detail.gen++
 	gen, binding, benchID, id, cols := detail.gen, detail.binding, detail.benchID, detail.id, max(rt.contentCols(), 1)
 	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
 	detail.cancel, detail.loading, detail.err = cancel, true, nil
-	detail.requestCols = cols
+	detail.action, detail.requestCols = action, cols
+	args := []string{"bench", "detail", strconv.Itoa(id), "--width", strconv.Itoa(cols), "-o", "json", "--expect-bench", benchID}
+	if action == detailSync {
+		args = append(args, "--sync")
+	}
 	go func() {
 		err := rt.semanticAuthority(ctx, binding)
 		var document *DetailDocument
 		if err == nil {
 			var output []byte
-			output, err = nativeOutput(ctx, rt.nativePath, rt.cfg.Cwd, semanticArgs([]string{
-				"bench", "detail", strconv.Itoa(id), "--width", strconv.Itoa(cols), "-o", "json", "--expect-bench", benchID,
-			}, binding)...)
+			output, err = nativeOutput(ctx, rt.nativePath, rt.cfg.Cwd, semanticArgs(args, binding)...)
 			if err == nil {
 				document, err = parseDetail(output, binding, benchID, id)
 			}
@@ -145,6 +181,24 @@ func (rt *runtime) requestDetail() {
 		admissionErr := rt.postSemanticAdmission(binding)
 		rt.emit(event{kind: evDetailLoaded, token: gen, detail: document, err: err, admissionErr: admissionErr})
 	}()
+}
+
+func (rt *runtime) handleDetailSync() bool {
+	if !rt.detail.active {
+		return false
+	}
+	rt.requestDetailSync()
+	rt.draw()
+	return true
+}
+
+func (rt *runtime) handleDetailRefresh() bool {
+	if !rt.detail.active {
+		return false
+	}
+	rt.requestDetail()
+	rt.draw()
+	return true
 }
 
 // cancelDetail invalidates callbacks and erases the prior actor's content. It
@@ -210,8 +264,8 @@ func (rt *runtime) layoutDetail(cols int) {
 }
 
 // resizeDetail reflows the captured item, never whichever row is now selected.
-// Immediate ANSI wrapping keeps all values visible while native table layout is
-// regenerated at the new width. Generation guards reject the older response.
+// Immediate ANSI wrapping keeps all values visible. A busy read is left alone;
+// otherwise native cache-only layout is regenerated at the new width.
 func (rt *runtime) resizeDetail() {
 	if !rt.detail.active {
 		return
@@ -220,7 +274,7 @@ func (rt *runtime) resizeDetail() {
 	rt.layoutDetail(cols)
 	rt.detail.offset = max(0, min(rt.detail.offset, rt.detailMaxOffset()))
 	if rt.detail.requestCols != cols {
-		rt.requestDetail()
+		rt.requestDetailAction(detailReflow)
 	}
 }
 
@@ -248,6 +302,10 @@ func (rt *runtime) handleDetailKey(key uv.KeyPressEvent) bool {
 	switch {
 	case key.MatchString("esc"):
 		rt.closeDetail()
+	case key.MatchString("s", "S", "shift+s"):
+		rt.handleDetailSync()
+	case key.MatchString("r", "R", "shift+r"):
+		rt.handleDetailRefresh()
 	case key.MatchString("j", "down"):
 		rt.scrollDetail(1)
 	case key.MatchString("k", "up"):
@@ -293,6 +351,26 @@ func (rt *runtime) detailPosition() string {
 	return fmt.Sprintf("Read-only · lines %d–%d / %d", min(detail.offset+1, end), end, len(detail.lines))
 }
 
+func (rt *runtime) detailActionLabel() string {
+	detail := &rt.detail
+	action, busy, ready := "Cached read", "Reading cached detail…", "Cached detail"
+	switch detail.action {
+	case detailRefresh:
+		action, busy, ready = "Cache refresh", "Refreshing cached detail…", "Cache refreshed"
+	case detailSync:
+		action, busy, ready = "Item sync", fmt.Sprintf("Syncing #%d and links…", detail.id), "Item and links synced"
+	case detailReflow:
+		action, busy, ready = "Cached reflow", "Reflowing cached detail…", "Cached detail reflowed"
+	}
+	if detail.loading {
+		return busy
+	}
+	if detail.err != nil {
+		return action + " failed: " + safe(detail.err.Error())
+	}
+	return ready
+}
+
 func (rt *runtime) drawDetail(out *strings.Builder, cols, rows int) {
 	rt.layoutDetail(cols)
 	detail := &rt.detail
@@ -302,13 +380,7 @@ func (rt *runtime) drawDetail(out *strings.Builder, cols, rows int) {
 		case 0:
 			drawBar(out, fmt.Sprintf("#%d %s", detail.id, safe(detail.title)), cols, "\x1b[1m\x1b[38;2;110;205;245m")
 		case 1:
-			context := rt.detailPosition() + " · " + safe(detail.bench)
-			if detail.loading {
-				context += " · loading / reflowing…"
-			}
-			if detail.err != nil {
-				context = "Detail failed: " + safe(detail.err.Error())
-			}
+			context := rt.detailActionLabel() + " · " + rt.detailPosition() + " · " + safe(detail.bench)
 			drawBar(out, context, cols, "\x1b[2m")
 		default:
 			index := detail.offset + row - 2
@@ -316,10 +388,7 @@ func (rt *runtime) drawDetail(out *strings.Builder, cols, rows int) {
 				out.WriteString(detail.lines[index])
 				out.WriteString("\x1b[0m")
 			} else if row == 2 {
-				message := "Loading full cached detail…"
-				if detail.err != nil {
-					message = "Detail unavailable: " + safe(detail.err.Error())
-				}
+				message := rt.detailActionLabel()
 				out.WriteString(ansi.Truncate(message, cols, "…"))
 			}
 		}

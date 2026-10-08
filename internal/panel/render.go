@@ -195,7 +195,7 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 	var buttons []button
 	switch {
 	case rt.detail.active:
-		buttons = []button{{"[Esc Back]", "detail-close"}}
+		buttons = []button{{"[S Sync item]", "detail-sync"}, {"[R Refresh cache]", "detail-refresh"}, {"[Esc Back]", "detail-close"}}
 	case rt.teamAreas.open:
 		buttons = []button{{"[Enter Review]", "team-area-confirm"}, {"[r Retry]", "team-area-retry"}, {"[Esc Back]", "team-area-cancel"}}
 	case rt.form != nil:
@@ -327,7 +327,11 @@ func (rt *runtime) footerText(truncated bool) string {
 		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
 	}
 	if rt.detail.active && !rt.reconnectRequired {
-		return "[Esc Back] · read-only detail · ↑/↓/j/k scroll · PgUp/PgDn/Home/End · wheel scroll · " + rt.detailPosition() + " · Ctrl+C quit"
+		buttons := "[S Sync item] [R Refresh cache]"
+		if rt.detailActionBusy() {
+			buttons = "\x1b[2m" + buttons + "\x1b[22m"
+		}
+		return buttons + " [Esc Back] · ↑/↓/j/k scroll · PgUp/PgDn/Home/End · " + rt.detailActionLabel() + " · " + rt.detailPosition()
 	}
 	if rt.teamAreas.open && !rt.reconnectRequired {
 		return "[Enter Review] [r Retry] [Esc Back] · team areas · ↑/↓/j/k select · PgUp/PgDn/Home/End · wheel scroll"

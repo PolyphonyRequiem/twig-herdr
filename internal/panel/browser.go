@@ -843,7 +843,17 @@ func (rt *runtime) handleAdmittedMouse(mouse uv.Mouse) {
 	}
 	if rt.detail.active && mouse.Button == uv.MouseLeft {
 		for _, hit := range rt.hits {
-			if hit.action == "detail-close" && mouse.Y == hit.y && mouse.X >= hit.x1 && mouse.X < hit.x2 {
+			if mouse.Y != hit.y || mouse.X < hit.x1 || mouse.X >= hit.x2 {
+				continue
+			}
+			switch hit.action {
+			case "detail-sync":
+				rt.handleDetailSync()
+				return
+			case "detail-refresh":
+				rt.handleDetailRefresh()
+				return
+			case "detail-close":
 				rt.closeDetail()
 				return
 			}
