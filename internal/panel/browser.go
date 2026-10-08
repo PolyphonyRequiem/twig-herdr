@@ -814,6 +814,8 @@ func (rt *runtime) cancelPins() {
 	rt.benchOperation = nil
 	rt.management.snapshot = nil
 	rt.management.error = ""
+	rt.management.errorNoticeSeq = 0
+	rt.management.operationFeedback = ""
 	rt.leaveConfiguration()
 }
 

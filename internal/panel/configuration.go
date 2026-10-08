@@ -205,6 +205,7 @@ type configurationForm struct {
 
 func (rt *runtime) leaveConfiguration() {
 	rt.cancelManagement()
+	rt.management.highlightName = ""
 	rt.configuration, rt.form = nil, nil
 	rt.showBrowserHelp = false
 	rt.overlayOffset = 0
@@ -237,7 +238,7 @@ func (rt *runtime) openInput(kind, value string) {
 		return
 	}
 	if kind == "bench" {
-		if rt.configuration == nil || rt.configuration.section != 3 {
+		if rt.configuration == nil || rt.configuration.section != 3 || rt.syncCancel != nil {
 			return
 		}
 		rt.form = &configurationForm{kind: kind, editor: newTextEditor(value), binding: rt.binding}
@@ -292,9 +293,12 @@ func (rt *runtime) chooseSection(section int) {
 	if rt.configuration == nil {
 		return
 	}
-	rt.configuration.section, rt.configuration.offset = (section+4)%4, 0
-	if rt.configuration.section == 3 {
-		rt.beginManagementRefresh()
+	next := (section + 4) % 4
+	if next != rt.configuration.section {
+		rt.configuration.section, rt.configuration.offset = next, 0
+		if next == 3 {
+			rt.beginManagementRefresh()
+		}
 	}
 	rt.revealConfigurationSelection()
 	rt.draw()
@@ -427,9 +431,10 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 	case key.MatchString("s"):
 		rt.beginSync()
 	case key.MatchString("r"):
-		rt.beginBenchRefresh(nil, true)
 		if c.section == 3 {
 			rt.beginManagementRefresh()
+		} else {
+			rt.beginBenchRefresh(nil, false)
 		}
 	case key.MatchString("j", "down", "k", "up", "home", "end"):
 		i := c.selected[c.section]
@@ -676,10 +681,31 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 	}
 	if view.section == 3 {
 		status = "Named local benches · create empty, then select explicitly"
-		if rt.management.cancel != nil {
-			status = "Loading native benches…"
-		} else if rt.management.error != "" {
-			status = "Refused: " + safe(rt.management.error) + " · r retries the list only"
+		if rt.benchOperation != nil {
+			status = rt.benchOperation.progress()
+		} else if rt.pinCancel != nil {
+			status = rt.notice
+		} else if rt.syncCancel != nil {
+			status = "Bench sync in progress · wait before changing benches"
+		} else {
+			if rt.management.cancel != nil {
+				status = "Loading native benches…"
+				if rt.management.snapshot != nil {
+					status = "Refreshing native benches… showing last admitted list; guarded actions remain available"
+				}
+			}
+		}
+		if rt.management.error != "" {
+			qualification := "List read failed: "
+			if rt.management.snapshot != nil {
+				qualification = "Stale admitted list · refresh failed: "
+			}
+			failure := qualification + safe(rt.management.error) + " · r retries the list only"
+			if rt.management.cancel != nil || rt.pinCancel != nil || rt.syncCancel != nil {
+				status += " · " + failure
+			} else {
+				status = failure
+			}
 		}
 	}
 	logical = append(logical, configurationLine{text: status, row: -1})
@@ -732,11 +758,17 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 		}
 		logical = append(logical, configurationLine{text: "[i Enter any ID]", action: "manual-id", row: -1})
 	} else if view.section == 3 {
-		logical = append(logical, configurationLine{text: "[n Create empty Bench]", action: "add", row: -1})
-		if selected := rt.selectedManagedBench(); selected != nil {
-			logical = append(logical, configurationLine{text: "[Enter Select Bench]", action: "bench-select", row: -1})
-			if !selected.IsDefault {
-				logical = append(logical, configurationLine{text: "[d Delete selected Bench…]", action: "remove", row: -1})
+		if rt.pinCancel == nil && rt.syncCancel == nil {
+			logical = append(logical, configurationLine{text: "[n Create empty Bench]", action: "add", row: -1})
+			if selected := rt.selectedManagedBench(); selected != nil {
+				label := "[Enter Select Bench]"
+				if view.sectionsFocused {
+					label = "[Select Bench]"
+				}
+				logical = append(logical, configurationLine{text: label, action: "bench-select", row: -1})
+				if !selected.IsDefault {
+					logical = append(logical, configurationLine{text: "[d Delete selected Bench…]", action: "remove", row: -1})
+				}
 			}
 		}
 	} else {
@@ -750,7 +782,11 @@ func (rt *runtime) configurationLines(cols int) []configurationLine {
 	} else if view.section == 2 {
 		logical = append(logical, configurationLine{text: "Sprints OR together: @Current, @Current+1, @Current-1, or absolute iteration paths. Saved rules drive cached reads and scoped sync.", row: -1})
 	} else if view.section == 3 {
-		logical = append(logical, configurationLine{text: "↑/↓ or j/k choose · Enter selects · n creates · d/Delete reviews deletion. Default cannot be deleted. Deletion preserves staged work; deleting the current Bench selects default.", row: -1})
+		navigation := "↑/↓ or j/k choose · Enter selects"
+		if view.sectionsFocused {
+			navigation = "↑/↓ choose sections · Enter/→ focuses the Bench list; then Enter selects"
+		}
+		logical = append(logical, configurationLine{text: navigation + " · n creates and highlights without selecting · d/Delete reviews deletion. Default cannot be deleted. Deletion preserves staged work; deleting the current Bench selects default.", row: -1})
 	} else {
 		logical = append(logical, configurationLine{text: "p toggles only Single pin; Shift+P only Subtree pin. Both can coexist. Other pin kinds, inherited membership, automatic rules and protected work remain. Uncached IDs stay unverified until scoped sync.", row: -1})
 	}
@@ -1023,6 +1059,10 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 			case "config-entry":
 				rt.configuration.sectionsFocused = false
 				rt.configuration.selected[rt.configuration.section] = hit.row
+				rt.draw()
+			case "config-items":
+				rt.configuration.sectionsFocused = false
+				rt.revealConfigurationSelection()
 				rt.draw()
 			case "config-bench-select":
 				rt.selectManagedBench()

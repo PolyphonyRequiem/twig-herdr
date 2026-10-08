@@ -3,6 +3,7 @@ package panel
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -38,6 +39,44 @@ func clickManagementAction(t *testing.T, rt *runtime, action string) {
 	t.Fatalf("missing clickable action %s", action)
 }
 
+func TestBenchBoundaryNavigationDoesNotBlockSelection(t *testing.T) {
+	rt := managementFixture(t)
+	rt.configuration.sectionsFocused = true
+	captureStdout(t, func() {
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyDown})
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyDown})
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyRight})
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+	})
+	if rt.benchOperation == nil || rt.benchOperation.kind != "switch" || rt.benchOperation.target.ID != "bench" {
+		t.Fatal("navigation at the last section blocked selection of the displayed Bench")
+	}
+}
+
+func TestAdmittedBenchActionsStayAvailableDuringBackgroundRefresh(t *testing.T) {
+	for _, deletion := range []bool{false, true} {
+		rt := managementFixture(t)
+		rt.management.cancel = func() {}
+		captureStdout(t, func() {
+			if deletion {
+				rt.openBenchDelete()
+				if rt.form == nil {
+					t.Fatal("background refresh hid the displayed Bench's deletion review")
+				}
+				rt.handleKey(uv.KeyPressEvent{Code: 'y', Text: "y"})
+			} else {
+				rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+			}
+		})
+		if rt.benchOperation == nil || rt.benchOperation.target.ID != "bench" {
+			t.Fatal("background refresh swallowed an explicit guarded Bench action")
+		}
+		if deletion && (rt.benchOperation.kind != "delete" || rt.benchOperation.target.ContentsDigest != "contents") {
+			t.Fatal("responsive deletion lost its reviewed contents guard")
+		}
+	}
+}
+
 func TestBenchCreationRetainsNameAndDoesNotSelect(t *testing.T) {
 	for _, standalone := range []bool{false, true} {
 		for _, mouse := range []bool{false, true} {
@@ -69,9 +108,24 @@ func TestBenchCreationRetainsNameAndDoesNotSelect(t *testing.T) {
 			if !reflect.DeepEqual(rt.benchOperation.args(), want) {
 				t.Fatal("creation command lost exact name or origin refusal guards")
 			}
-			captureStdout(t, func() { rt.handleBenchOperationDone(event{token: rt.pinGen}) })
+			receiptName := "Native 界 Name"
+			captureStdout(t, func() {
+				rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(`{"name":"Native 界 Name"}`)})
+			})
 			if rt.browser.snapshot != original || rt.configuration == nil || rt.management.cancel == nil || rt.bench.launchCancel == nil {
 				t.Fatal("successful creation must remain on its current Bench and refresh native management truth")
+			}
+			refreshed := &benchManagement{Version: 1, CurrentBenchID: "bench", Benches: append([]managedBench{}, rt.management.snapshot.Benches...)}
+			refreshed.Benches = append(refreshed.Benches, managedBench{ID: "created-id", Name: receiptName, ContentsDigest: "created-empty", Pins: []BenchPin{}, Queries: []string{}})
+			captureStdout(t, func() {
+				rt.handleManagementLoaded(event{token: rt.management.gen, binding: rt.binding, management: refreshed})
+			})
+			if rt.selectedManagedBench().ID != "created-id" || rt.selectedManagedBench().Name != receiptName || rt.management.snapshot.CurrentBenchID != "bench" || rt.browser.snapshot != original || rt.benchOperation != nil || rt.configuration.sectionsFocused {
+				t.Fatal("creation did not highlight the native receipt name without switching the current Bench")
+			}
+			captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter}) })
+			if rt.benchOperation == nil || rt.benchOperation.kind != "switch" || rt.benchOperation.target.ID != "created-id" || rt.benchOperation.target.Name != receiptName {
+				t.Fatal("explicit Enter did not select the refreshed native creation identity")
 			}
 		}
 	}
@@ -100,7 +154,7 @@ func TestBenchSelectRefreshesAndResetsOldItemStateWithoutLeavingManager(t *testi
 		}
 		oldGen := rt.bench.launchGen - 1
 		captureStdout(t, func() {
-			rt.handleBenchOperationDone(event{token: rt.pinGen})
+			rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(`{"name":"default"}`)})
 			rt.handleBrowserLoaded(event{token: oldGen, browser: &BrowserSnapshot{BenchID: "old"}})
 		})
 		if rt.configuration == nil || rt.configuration.section != 3 || rt.browser.snapshot != nil || rt.browser.selectedID != 0 || len(rt.browser.collapsed) != 0 || rt.offsets["tree"] != 0 || rt.offsets["table"] != 0 {
@@ -160,7 +214,7 @@ func TestBenchDeletePreviewCancelAndConfirmParity(t *testing.T) {
 			if rt.benchOperation == nil || !reflect.DeepEqual(rt.benchOperation.args(), want) {
 				t.Fatal("confirmed deletion lost captured name, ID, digest or origin")
 			}
-			captureStdout(t, func() { rt.handleBenchOperationDone(event{token: rt.pinGen}) })
+			captureStdout(t, func() { rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(`{"name":"My 界 Bench"}`)}) })
 			if rt.browser.snapshot != nil || rt.configuration == nil || rt.offsets["tree"] != 0 {
 				t.Fatal("current deletion did not reset old Bench viewer for default fallback")
 			}
@@ -175,7 +229,7 @@ func TestDeletionResetsViewerWhenCapturedCurrentFlagIsStale(t *testing.T) {
 	captureStdout(t, func() {
 		rt.openBenchDelete()
 		rt.handleKey(uv.KeyPressEvent{Code: 'y', Text: "y"})
-		rt.handleBenchOperationDone(event{token: rt.pinGen})
+		rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(`{"name":"My 界 Bench"}`)})
 	})
 	if rt.browser.snapshot != nil || rt.offsets["tree"] != 0 || rt.configuration == nil {
 		t.Fatal("captured current flag preserved old viewer after deletion")
@@ -245,6 +299,15 @@ func TestNativeBenchErrorsStayVisibleWithoutRetryingDeletion(t *testing.T) {
 		}
 		if kind == "delete" && rt.form != nil {
 			t.Fatal("native stale deletion retained a reusable confirmation")
+		}
+		if kind == "delete" {
+			captureStdout(t, func() {
+				rt.openBenchDelete()
+				rt.handleKey(uv.KeyPressEvent{Code: 'y', Text: "y"})
+			})
+			if rt.form != nil || rt.benchOperation != nil {
+				t.Fatal("native-refused deletion was resubmitted before fresh contents arrived")
+			}
 		}
 	}
 }
@@ -343,5 +406,279 @@ func TestHeaderShowsNativeEffectiveTeamWhenRawTeamIsEmpty(t *testing.T) {
 	rt.browser.snapshot.EffectiveTeam = "Project Team"
 	if !strings.Contains(ansi.Strip(rt.headerText()), "Team: Project Team") {
 		t.Fatal("older standalone status concealed the guarded browser's effective team")
+	}
+}
+
+func TestManagementRefreshCoalescesNavigationAndRepeatedRefreshGestures(t *testing.T) {
+	rt := managementFixture(t)
+	canceled := 0
+	rt.management.gen, rt.management.cancel = 9, func() { canceled++ }
+	rt.configuration.sectionsFocused = true
+	browserGen := rt.bench.launchGen
+	captureStdout(t, func() {
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyDown})
+		rt.handleKey(uv.KeyPressEvent{Code: '4', Text: "4"})
+		rt.handleKey(uv.KeyPressEvent{Code: 'r', Text: "r"})
+		rt.handleKey(uv.KeyPressEvent{Code: 'r', Text: "r"})
+		rt.beginManagementRefresh()
+		rt.draw()
+		clicked := false
+		for _, hit := range rt.hits {
+			if hit.action == "config-section" && hit.row == 3 {
+				rt.handleMouse(uv.Mouse{X: hit.x1, Y: hit.y, Button: uv.MouseLeft})
+				clicked = true
+				break
+			}
+		}
+		if !clicked {
+			t.Fatal("Bench section has no mouse navigation target")
+		}
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyTab, Mod: uv.ModShift})
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyTab})
+	})
+	if rt.management.gen != 9 || rt.management.cancel == nil || canceled != 0 || rt.bench.launchGen != browserGen || rt.configuration.selected[3] != 1 {
+		t.Fatal("navigation or repeated refresh replaced the admitted list's pending read or restarted membership")
+	}
+	captureStdout(t, func() {
+		rt.handleManagementLoaded(event{token: 9, binding: rt.binding, management: rt.management.snapshot})
+	})
+	if rt.management.cancel != nil || canceled != 1 || rt.selectedManagedBench().ID != "bench" {
+		t.Fatal("coalesced read did not complete normally with its displayed selection")
+	}
+}
+
+func TestGuardedActionCancelsPendingReadAndIgnoresLateCompletion(t *testing.T) {
+	for _, deletion := range []bool{false, true} {
+		rt := managementFixture(t)
+		oldSnapshot := rt.management.snapshot
+		canceled := 0
+		rt.management.gen, rt.management.cancel = 7, func() { canceled++ }
+		captureStdout(t, func() {
+			if deletion {
+				rt.openBenchDelete()
+				rt.handleKey(uv.KeyPressEvent{Code: 'y', Text: "y"})
+			} else {
+				rt.selectManagedBench()
+			}
+		})
+		pending, token := rt.benchOperation, rt.pinGen
+		if pending == nil || pending.target.ID != "bench" || canceled != 1 || rt.management.cancel != nil || rt.management.gen == 7 {
+			t.Fatal("explicit guarded action did not cancel its obsolete read and capture the displayed identity")
+		}
+		captureStdout(t, func() {
+			rt.handleManagementLoaded(event{token: 7, binding: rt.binding, management: &benchManagement{}, admissionErr: errors.New("obsolete origin result")})
+			rt.handleBenchOperationDone(event{token: token - 1, data: []byte(`{"name":"old"}`)})
+			rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+			rt.handleKey(uv.KeyPressEvent{Code: 'n', Text: "n"})
+			rt.handleKey(uv.KeyPressEvent{Code: 'd', Text: "d"})
+			rt.handleKey(uv.KeyPressEvent{Code: 'r', Text: "r"})
+		})
+		if rt.reconnectRequired || rt.management.snapshot != oldSnapshot || rt.benchOperation != pending || rt.pinGen != token || rt.pinCancel == nil || rt.form != nil || rt.management.cancel != nil {
+			t.Fatal("late read/completion or busy gesture retargeted, released or repeated the active mutation")
+		}
+		captureStdout(t, func() { rt.handleBenchOperationDone(event{token: token, data: []byte(`{"name":"My 界 Bench"}`)}) })
+		refreshGen := rt.management.gen
+		captureStdout(t, func() {
+			rt.handleManagementLoaded(event{token: 7, binding: rt.binding, err: errors.New("obsolete failed read")})
+		})
+		if rt.management.cancel == nil || rt.management.gen != refreshGen || rt.management.error != "" || rt.pinCancel != nil || rt.benchOperation != nil {
+			t.Fatal("obsolete read changed the fresh post-mutation generation")
+		}
+	}
+}
+
+func TestRefreshedDeletionContentsRequireNewConfirmation(t *testing.T) {
+	rt := managementFixture(t)
+	rt.management.gen, rt.management.cancel = 5, func() {}
+	fresh := &benchManagement{Version: 1, CurrentBenchID: "bench", Benches: append([]managedBench{}, rt.management.snapshot.Benches...)}
+	fresh.Benches[1].ContentsDigest = "new-contents"
+	captureStdout(t, func() {
+		rt.openBenchDelete()
+		rt.handleManagementLoaded(event{token: 5, binding: rt.binding, management: fresh})
+		rt.handleKey(uv.KeyPressEvent{Code: 'y', Text: "y"})
+	})
+	if rt.form != nil || rt.benchOperation != nil || rt.pinCancel != nil || rt.management.cancel == nil {
+		t.Fatal("refresh silently upgraded a reviewed deletion digest or retained reusable confirmation")
+	}
+	captureStdout(t, func() {
+		rt.handleManagementLoaded(event{token: rt.management.gen, binding: rt.binding, management: fresh})
+		rt.openBenchDelete()
+		rt.handleKey(uv.KeyPressEvent{Code: 'y', Text: "y"})
+	})
+	if rt.benchOperation == nil || rt.benchOperation.kind != "delete" || rt.benchOperation.target.ContentsDigest != "new-contents" {
+		t.Fatal("a new deletion review did not capture the refreshed exact contents")
+	}
+}
+
+func TestTransientManagementReadRetainsAdmittedListAndVisibleError(t *testing.T) {
+	rt := managementFixture(t)
+	snapshot := rt.management.snapshot
+	rt.management.gen, rt.management.cancel = 3, func() {}
+	output := captureStdout(t, func() {
+		rt.handleManagementLoaded(event{token: 3, binding: rt.binding, err: errors.New("network unavailable")})
+	})
+	if rt.management.snapshot != snapshot || rt.selectedManagedBench().ID != "bench" || rt.management.error == "" || !strings.Contains(ansi.Strip(output), "Stale admitted list") || !strings.Contains(ansi.Strip(output), "network unavailable") {
+		t.Fatal("transient same-origin failure erased admitted targets or hid the stale/error state")
+	}
+	captureStdout(t, func() { rt.beginManagementRefresh() })
+	if rt.management.error == "" || rt.management.snapshot != snapshot {
+		t.Fatal("retry hid the real failed read before a successful replacement arrived")
+	}
+	captureStdout(t, func() { rt.selectManagedBench() })
+	if rt.benchOperation == nil || rt.benchOperation.target.ID != "bench" || rt.management.cancel != nil {
+		t.Fatal("stale admitted target could not submit an exact guarded action during retry")
+	}
+}
+
+func TestScrolledManagementRefreshErrorRemainsVisible(t *testing.T) {
+	rt := managementFixture(t)
+	rt.size.rows = 12
+	for i := range 24 {
+		rt.management.snapshot.Benches = append(rt.management.snapshot.Benches, managedBench{ID: fmt.Sprint(i + 100), Name: fmt.Sprintf("Other Bench %02d", i), ContentsDigest: "digest", Pins: []BenchPin{}, Queries: []string{}})
+	}
+	rt.configuration.offset = 15
+	rt.management.gen, rt.management.cancel = 3, func() {}
+	output := captureStdout(t, func() {
+		rt.handleManagementLoaded(event{token: 3, binding: rt.binding, err: errors.New("network unavailable")})
+	})
+	if !strings.Contains(ansi.Strip(output), "network unavailable") || rt.management.snapshot == nil {
+		t.Fatal("scrolled cached Bench list hid its refresh failure")
+	}
+}
+
+func TestManagementReadCannotRetainAnotherActorsCachedList(t *testing.T) {
+	for _, changed := range []string{"post-admission", "event-origin", "cached-origin"} {
+		rt := managementFixture(t)
+		rt.management.gen, rt.management.cancel = 3, func() {}
+		ev := event{token: 3, binding: rt.binding, err: errors.New("native read failed")}
+		switch changed {
+		case "post-admission":
+			ev.admissionErr = errors.New("binding-changed: account changed")
+		case "event-origin":
+			ev.binding.IdentityID = "another-actor"
+		case "cached-origin":
+			rt.management.binding.IdentityID = "another-actor"
+		}
+		captureStdout(t, func() { rt.handleManagementLoaded(ev) })
+		if rt.management.snapshot != nil || rt.management.cancel != nil || rt.benchOperation != nil {
+			t.Fatal("failed read retained another actor's admitted management rows")
+		}
+		if changed != "cached-origin" && (!rt.reconnectRequired || rt.configuration != nil || rt.browser.snapshot != nil) {
+			t.Fatal("changed admission did not erase the prior actor's viewer and editor")
+		}
+	}
+}
+
+func TestBenchEnterControlFollowsFocusAndBusyActionsDisappear(t *testing.T) {
+	for _, mouse := range []bool{false, true} {
+		rt := managementFixture(t)
+		rt.size.cols = 160
+		rt.configuration.sectionsFocused = true
+		captureStdout(t, func() {
+			rt.draw()
+			if !strings.Contains(rt.footerText(false), "[Enter Items]") || strings.Contains(rt.footerText(false), "[Enter Select]") {
+				t.Fatal("section-focused Enter control falsely advertises selection")
+			}
+			if mouse {
+				clickManagementAction(t, rt, "config-items")
+			} else {
+				rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+			}
+			if rt.configuration.sectionsFocused || rt.benchOperation != nil || rt.pinCancel != nil {
+				t.Fatal("Enter-items control selected a Bench rather than focusing the list")
+			}
+			if !strings.Contains(rt.footerText(false), "[Enter Select]") || strings.Contains(rt.footerText(false), "[Enter Items]") {
+				t.Fatal("list-focused Enter control does not advertise its actual action")
+			}
+			if mouse {
+				clickManagementAction(t, rt, "config-bench-select")
+			} else {
+				rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+			}
+			for _, hit := range rt.hits {
+				if hit.action == "config-add" || hit.action == "config-remove" || hit.action == "config-bench-select" {
+					t.Fatal("busy mutation left a clickable control that cannot perform its advertised action")
+				}
+			}
+		})
+		if rt.benchOperation == nil || rt.benchOperation.target.ID != "bench" || !strings.Contains(rt.notice, "My 界 Bench") {
+			t.Fatal("explicit list selection lost its target or named operation progress")
+		}
+	}
+}
+
+func TestSuccessfulMutationWithUnreadableReceiptIsNotRetriedOrGuessed(t *testing.T) {
+	for _, output := range []string{`{"message":"created"}`, `not JSON`} {
+		rt := managementFixture(t)
+		original := rt.browser.snapshot
+		captureStdout(t, func() {
+			rt.openInput("bench", "  guessed-name  ")
+			rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+			rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(output)})
+		})
+		if rt.form != nil || rt.pinCancel != nil || rt.benchOperation != nil || rt.management.highlightName != "" || rt.management.cancel == nil || rt.browser.snapshot != original || !strings.Contains(rt.notice, "receipt") {
+			t.Fatal("successful mutation with bad receipt invited a retry, guessed native naming or hid receipt failure")
+		}
+		warning := rt.notice
+		captureStdout(t, func() {
+			rt.handleManagementLoaded(event{token: rt.management.gen, binding: rt.binding, err: errors.New("replacement read unavailable")})
+		})
+		if !strings.Contains(rt.notice, warning) || !strings.Contains(rt.notice, "replacement read unavailable") || rt.form != nil {
+			t.Fatal("refresh failure hid the mutation outcome or invited repeating it")
+		}
+	}
+}
+
+func TestManagementRefreshPreservesInactiveSectionSelectionAndFallsBackToNativeCurrent(t *testing.T) {
+	rt := managementFixture(t)
+	reordered := &benchManagement{Version: 1, CurrentBenchID: "bench", Benches: []managedBench{rt.management.snapshot.Benches[1], rt.management.snapshot.Benches[0]}}
+	reordered.Benches = append(reordered.Benches, managedBench{ID: "removed-id", Name: "Removed Bench", ContentsDigest: "empty", Pins: []BenchPin{}, Queries: []string{}})
+	rt.configuration.section = 2
+	rt.management.gen, rt.management.cancel = 3, func() {}
+	captureStdout(t, func() { rt.handleManagementLoaded(event{token: 3, binding: rt.binding, management: reordered}) })
+	if rt.configuration.section != 2 || rt.configuration.selected[3] != 0 || rt.management.snapshot.CurrentBenchID != "bench" {
+		t.Fatal("background refresh changed the active section or lost the inactive Bench target")
+	}
+	rt.configuration.section, rt.configuration.selected[3] = 3, 2
+	removed := &benchManagement{Version: 1, CurrentBenchID: "bench", Benches: []managedBench{reordered.Benches[1], reordered.Benches[0]}}
+	rt.management.gen, rt.management.cancel = 4, func() {}
+	captureStdout(t, func() { rt.handleManagementLoaded(event{token: 4, binding: rt.binding, management: removed}) })
+	if rt.selectedManagedBench().ID != "bench" || rt.management.snapshot.CurrentBenchID != "bench" || rt.benchOperation != nil {
+		t.Fatal("removed selection did not fall back to native current without switching")
+	}
+}
+
+func TestCreationHighlightWaitsForSuccessfulRefreshWithoutSelecting(t *testing.T) {
+	rt := managementFixture(t)
+	original := rt.browser.snapshot
+	captureStdout(t, func() {
+		rt.openInput("bench", "  Entered Name  ")
+		rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter})
+		rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(`{"name":"Stored 界 Name"}`)})
+		rt.handleManagementLoaded(event{token: rt.management.gen, binding: rt.binding, err: errors.New("temporary list failure")})
+	})
+	if rt.management.highlightName != "Stored 界 Name" || rt.selectedManagedBench().ID != "bench" || rt.management.error == "" || rt.benchOperation != nil || rt.browser.snapshot != original {
+		t.Fatal("failed creation refresh guessed a highlight, selected a Bench or lost the native receipt")
+	}
+	refreshed := &benchManagement{Version: 1, CurrentBenchID: "bench", Benches: []managedBench{{ID: "new-id", Name: "Stored 界 Name", ContentsDigest: "new-empty", Pins: []BenchPin{}, Queries: []string{}}}}
+	refreshed.Benches = append(refreshed.Benches, rt.management.snapshot.Benches...)
+	captureStdout(t, func() {
+		rt.handleKey(uv.KeyPressEvent{Code: 'r', Text: "r"})
+		rt.handleManagementLoaded(event{token: rt.management.gen, binding: rt.binding, management: refreshed})
+	})
+	if rt.selectedManagedBench().ID != "new-id" || rt.management.snapshot.CurrentBenchID != "bench" || rt.management.error != "" || rt.management.highlightName != "" || rt.benchOperation != nil || rt.pinCancel != nil || rt.browser.snapshot != original {
+		t.Fatal("successful retry did not highlight the real created Bench while preserving the current pointer")
+	}
+}
+
+func TestBenchOperationCompletionCannotCrossActorChange(t *testing.T) {
+	rt := managementFixture(t)
+	captureStdout(t, func() {
+		rt.selectManagedBench()
+		rt.binding.IdentityID = "another-actor"
+		rt.handleBenchOperationDone(event{token: rt.pinGen, data: []byte(`{"name":"My 界 Bench"}`)})
+	})
+	if !rt.reconnectRequired || rt.browser.snapshot != nil || rt.management.snapshot != nil || rt.configuration != nil || rt.form != nil || rt.pinCancel != nil || rt.management.cancel != nil {
+		t.Fatal("mutation completion crossed an actor change or resurrected prior actor data")
 	}
 }

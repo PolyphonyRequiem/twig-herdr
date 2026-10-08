@@ -30,11 +30,14 @@ type managedBench struct {
 }
 
 type managementState struct {
-	snapshot *benchManagement
-	binding  HostBinding
-	cancel   context.CancelFunc
-	gen      uint64
-	error    string
+	snapshot          *benchManagement
+	binding           HostBinding
+	cancel            context.CancelFunc
+	gen               uint64
+	error             string
+	errorNoticeSeq    uint64
+	highlightName     string
+	operationFeedback string
 }
 
 type benchOperation struct {
@@ -93,13 +96,13 @@ func (rt *runtime) cancelManagement() {
 }
 
 func (rt *runtime) beginManagementRefresh() {
-	if rt.closing || rt.reconnectRequired || rt.pinCancel != nil || rt.syncCancel != nil || rt.configuration == nil || rt.configuration.section != 3 {
+	if rt.closing || rt.reconnectRequired || rt.pinCancel != nil || rt.syncCancel != nil || rt.management.cancel != nil || rt.configuration == nil || rt.configuration.section != 3 {
 		return
 	}
 	rt.cancelManagement()
 	gen, binding := rt.management.gen, rt.binding
 	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
-	rt.management.cancel, rt.management.error = cancel, ""
+	rt.management.cancel = cancel
 	rt.draw()
 	go func() {
 		err := rt.semanticAuthority(ctx, binding)
@@ -138,20 +141,71 @@ func (rt *runtime) handleManagementLoaded(ev event) {
 			rt.stopForReconnect(ev.err)
 			return
 		}
-		rt.management.snapshot = nil
-		rt.management.error = ev.err.Error()
-	} else if ev.management != nil {
-		selectedID := ""
-		if selected := rt.selectedManagedBench(); selected != nil {
-			selectedID = selected.ID
+		// A failed read cannot invalidate the previously admitted same-origin
+		// capture. Native target/content guards still decide explicit actions.
+		if !sameManagementOrigin(rt.management.binding, ev.binding) {
+			rt.management.snapshot = nil
 		}
-		rt.management.snapshot, rt.management.binding = ev.management, ev.binding
+		rt.management.error = ev.err.Error()
+		message := "Bench list unavailable: " + safe(ev.err.Error())
+		if rt.management.snapshot != nil {
+			message = "Showing previous Bench list; refresh failed: " + safe(ev.err.Error())
+		}
+		if rt.management.operationFeedback != "" {
+			message = "Bench list refresh failed: " + safe(ev.err.Error()) + ". " + rt.management.operationFeedback
+		}
+		rt.setError(message)
+		rt.management.errorNoticeSeq = rt.noticeSeq
+	} else if ev.management != nil {
+		if rt.management.errorNoticeSeq != 0 && rt.management.errorNoticeSeq == rt.noticeSeq {
+			if rt.management.operationFeedback != "" {
+				rt.setNotice(rt.management.operationFeedback, 0)
+			} else {
+				rt.setNotice("Bench list refreshed.", noticeDuration)
+			}
+		}
+		rt.management.errorNoticeSeq = 0
+		rt.management.operationFeedback = ""
+		selectedID := ""
+		if rt.configuration != nil && rt.management.snapshot != nil {
+			i := rt.configuration.selected[3]
+			if i >= 0 && i < len(rt.management.snapshot.Benches) {
+				selectedID = rt.management.snapshot.Benches[i].ID
+			}
+		}
+		rt.management.snapshot, rt.management.binding, rt.management.error = ev.management, ev.binding, ""
 		if rt.configuration != nil {
-			rt.configuration.selected[3] = 0
+			selected := 0
 			for i, bench := range ev.management.Benches {
-				if bench.ID == selectedID || (selectedID == "" && bench.IsCurrent) {
-					rt.configuration.selected[3] = i
+				if bench.IsCurrent {
+					selected = i
 				}
+			}
+			for i, bench := range ev.management.Benches {
+				if bench.ID == selectedID {
+					selected = i
+				}
+			}
+			if name := rt.management.highlightName; name != "" {
+				found := false
+				for i, bench := range ev.management.Benches {
+					if bench.Name == name {
+						selected, found = i, true
+					}
+				}
+				if found {
+					rt.setNotice(fmt.Sprintf("Created Bench %q. Highlighted, not selected; Enter on the list selects it.", safe(name)), 0)
+					if rt.configuration.section == 3 {
+						rt.configuration.sectionsFocused = false
+					}
+				} else {
+					rt.setError(fmt.Sprintf("Created Bench %q is absent from the refreshed list. Current Bench unchanged; r refreshes the list.", safe(name)))
+				}
+				rt.management.highlightName = ""
+			}
+			rt.configuration.selected[3] = selected
+			if rt.configuration.section == 3 {
+				rt.revealConfigurationSelection()
 			}
 		}
 	}
@@ -171,7 +225,7 @@ func (rt *runtime) selectedManagedBench() *managedBench {
 
 func (rt *runtime) openBenchDelete() {
 	target := rt.selectedManagedBench()
-	if target == nil || target.IsDefault || rt.pinCancel != nil || rt.management.cancel != nil {
+	if target == nil || target.IsDefault || rt.pinCancel != nil || rt.syncCancel != nil {
 		return
 	}
 	rt.form = &configurationForm{kind: "bench", remove: true, confirm: true, choice: 1, benchName: target.Name, benchID: target.ID, binding: rt.management.binding, target: *target}
@@ -188,6 +242,16 @@ func (op benchOperation) args() []string {
 		args = append(args, "--confirm", op.target.Name, "--expect-contents", op.target.ContentsDigest)
 	}
 	return semanticArgs(append(args, "-o", "json"), op.binding)
+}
+
+func (op benchOperation) progress() string {
+	verb := "Creating empty"
+	if op.kind == "switch" {
+		verb = "Selecting"
+	} else if op.kind == "delete" {
+		verb = "Deleting"
+	}
+	return fmt.Sprintf("%s Bench %q…", verb, safe(op.target.Name))
 }
 
 func (rt *runtime) beginBenchOperation(op benchOperation) {
@@ -210,7 +274,7 @@ func (rt *runtime) beginBenchOperation(op benchOperation) {
 	}
 	if op.kind != "create" {
 		matched := false
-		if rt.management.snapshot != nil && rt.management.cancel == nil && sameManagementOrigin(rt.management.binding, op.binding) {
+		if rt.management.snapshot != nil && sameManagementOrigin(rt.management.binding, op.binding) {
 			for _, bench := range rt.management.snapshot.Benches {
 				if bench.ID == op.target.ID && bench.Name == op.target.Name && (op.kind != "delete" || (!bench.IsDefault && bench.ContentsDigest == op.target.ContentsDigest)) {
 					matched = true
@@ -235,23 +299,39 @@ func (rt *runtime) beginBenchOperation(op benchOperation) {
 	gen := rt.pinGen
 	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
 	rt.pinCancel, rt.benchOperation = cancel, &op
-	rt.mutationLabel = "Bench"
-	rt.setNotice("Changing local benches…", 0)
+	rt.management.highlightName = ""
+	rt.management.operationFeedback = ""
+	rt.mutationLabel = "Bench " + op.kind
+	rt.setNotice(op.progress(), 0)
 	rt.draw()
 	go func() {
 		err := rt.semanticAuthority(ctx, op.binding)
+		var output []byte
 		if err == nil {
-			_, err = nativeOutput(ctx, rt.nativePath, rt.cfg.Cwd, op.args()...)
+			output, err = nativeOutput(ctx, rt.nativePath, rt.cfg.Cwd, op.args()...)
 		}
 		admissionErr := rt.postSemanticAdmission(op.binding)
-		rt.emit(event{kind: evBenchOperationDone, token: gen, err: err, admissionErr: admissionErr})
+		rt.emit(event{kind: evBenchOperationDone, token: gen, data: output, err: err, admissionErr: admissionErr})
 	}()
 }
 
 func (rt *runtime) selectManagedBench() {
-	if target := rt.selectedManagedBench(); target != nil && rt.management.cancel == nil {
+	if target := rt.selectedManagedBench(); target != nil {
 		rt.beginBenchOperation(benchOperation{kind: "switch", target: *target, binding: rt.management.binding})
 	}
+}
+
+func parseBenchReceipt(output []byte) (string, error) {
+	var receipt struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(output, &receipt); err != nil {
+		return "", fmt.Errorf("invalid native Bench receipt: %w", err)
+	}
+	if strings.TrimSpace(receipt.Name) == "" {
+		return "", errors.New("native Bench receipt is missing its name")
+	}
+	return receipt.Name, nil
 }
 
 func (rt *runtime) handleBenchOperationDone(ev event) {
@@ -265,12 +345,21 @@ func (rt *runtime) handleBenchOperationDone(ev event) {
 		rt.stopForReconnect(ev.admissionErr)
 		return
 	}
+	if !sameManagementOrigin(op.binding, rt.binding) {
+		rt.stopForReconnect(errors.New("binding-changed/reconnect: Bench operation origin changed"))
+		return
+	}
 	if ev.err != nil {
 		if bindingChanged(ev.err.Error()) {
 			rt.stopForReconnect(ev.err)
 			return
 		}
-		rt.setError("Bench " + op.kind + " refused: " + safe(ev.err.Error()))
+		rt.setError(fmt.Sprintf("Bench %s %q refused: %s", op.kind, safe(op.target.Name), safe(ev.err.Error())))
+		if op.kind != "create" {
+			// A native refusal makes this capture unsuitable for a new confirmation.
+			// Require a successful replacement read before presenting it again.
+			rt.management.snapshot = nil
+		}
 		// Creation errors remain editable. Deletion errors always require a fresh
 		// list and a newly opened confirmation; never retry a captured digest.
 		if op.kind == "create" && rt.configuration != nil && rt.configuration.section == 3 && rt.form == nil {
@@ -280,7 +369,24 @@ func (rt *runtime) handleBenchOperationDone(ev event) {
 			}
 		}
 	} else {
-		rt.setNotice("Bench "+op.kind+" completed; refreshing native truth. Staged work is preserved.", 0)
+		name, receiptErr := parseBenchReceipt(ev.data)
+		if receiptErr != nil {
+			// Exit success means the mutation landed. An unreadable receipt must
+			// not become a refusal that invites repeating a committed creation.
+			rt.setError("Bench " + op.kind + " completed, but " + safe(receiptErr.Error()) + ". Refresh the list before another action.")
+		} else {
+			switch op.kind {
+			case "create":
+				if rt.configuration != nil {
+					rt.management.highlightName = name
+				}
+				rt.setNotice(fmt.Sprintf("Created empty Bench %q. Current Bench unchanged; the next list refresh highlights it.", safe(name)), 0)
+			case "switch":
+				rt.setNotice(fmt.Sprintf("Selected Bench %q. Staged work is preserved.", safe(name)), 0)
+			case "delete":
+				rt.setNotice(fmt.Sprintf("Deleted Bench %q. Staged work is preserved.", safe(name)), 0)
+			}
+		}
 	}
 	// Even refusals can mean another process switched/deleted the current Bench.
 	// Keep configuration open, but let the next native read reset item state.
@@ -293,6 +399,7 @@ func (rt *runtime) handleBenchOperationDone(ev event) {
 			rt.configuration.selected[0], rt.configuration.selected[1], rt.configuration.selected[2] = 0, 0, 0
 		}
 	}
+	rt.management.operationFeedback = rt.notice
 	rt.beginManagementRefresh()
 	rt.beginBenchRefresh(nil, true)
 	rt.draw()

@@ -210,9 +210,19 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 			buttons = []button{{rt.pinButton("single"), "config-pin-single"}, {rt.pinButton("tree"), "config-pin-tree"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
 		}
 		if rt.configuration.section == 3 {
-			buttons = []button{{"[n Create]", "config-add"}, {"[Enter Select]", "config-bench-select"}, {"[Esc Back]", "config-back"}}
-			if target := rt.selectedManagedBench(); target != nil && !target.IsDefault {
-				buttons = append(buttons, button{"[d Delete]", "config-remove"})
+			buttons = []button{{"[Esc Back]", "config-back"}, {"[Enter Items]", "config-items"}}
+			if rt.pinCancel == nil && rt.syncCancel == nil {
+				buttons = append(buttons, button{"[n Create]", "config-add"})
+				if target := rt.selectedManagedBench(); target != nil {
+					label := "[Enter Select]"
+					if rt.configuration.sectionsFocused {
+						label = "[Select]"
+					}
+					buttons = append(buttons, button{label, "config-bench-select"})
+					if !target.IsDefault {
+						buttons = append(buttons, button{"[d Delete]", "config-remove"})
+					}
+				}
 			}
 		}
 		if cols < 55 {
@@ -326,11 +336,26 @@ func (rt *runtime) footerText(truncated bool) string {
 			navigation = "Sections: ↑/↓ · Enter/→ items"
 		}
 		if rt.configuration.section == 3 {
-			buttons := "[n Create] [Enter Select]"
-			if target := rt.selectedManagedBench(); target != nil && !target.IsDefault {
-				buttons += " [d Delete]"
+			buttons := ""
+			if rt.configuration.sectionsFocused {
+				buttons = "[Enter Items] "
 			}
-			return navigation + " · " + buttons + " [Esc Back] · Tab/1/2/3/4 sections · r refresh"
+			if rt.pinCancel == nil && rt.syncCancel == nil {
+				buttons += "[n Create]"
+				if target := rt.selectedManagedBench(); target != nil {
+					label := " [Enter Select]"
+					if rt.configuration.sectionsFocused {
+						label = " [Select]"
+					}
+					buttons += label
+					if !target.IsDefault {
+						buttons += " [d Delete]"
+					}
+				}
+			} else {
+				buttons += "Changing Bench; wait for completion"
+			}
+			return navigation + " · " + buttons + " [Esc Back] · Tab/1/2/3/4 sections · r refresh list"
 		}
 		if rt.configuration.section == 0 {
 			return navigation + " · " + rt.pinButton("single") + " " + rt.pinButton("tree") + " [i ID] [Esc Back] · s sync · r refresh"
@@ -459,7 +484,7 @@ func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
 		"The footer shows Pin/Unpin for each kind from native cached explicit pins. Click those named controls for the same action as p/Shift+P. A busy pin action cannot be repeated; native origin, Bench and settings guards refuse stale captures. Membership refreshes from native truth afterward.",
 		"b opens Bench Configuration with Pins / Areas / Sprints / Benches. Tab or 1/2/3/4 chooses a section. Pins uses the same p/Shift+P toggles, including uncached IDs. Areas/Sprints use a add and d remove with review; p/P never pin those entries. Esc returns to the same viewer, selection, folds and viewport.",
 		"Manual IDs exist only in b Bench configuration > Pins > i. Enter validates a positive ID and opens review; p adds Single pin, Shift+P adds Subtree pin immediately. Enter adds the chosen kind. These are add intents, not toggles. Unknown IDs stay uncached/unverified until scoped sync. Text-entry q/c/p/P are text; Esc cancels input first.",
-		"Benches uses arrows/j/k to choose, Enter to select, n to create an empty named Bench, and d/Delete to review deletion. Names retain spaces and Unicode. Every deletion, even an empty Bench, shows its exact name, saved pins and queries, then Yes/Cancel. Default is protected. Staged work survives; deleting the current Bench falls back to default. A stale target or contents digest requires a fresh list and new confirmation; nothing is retried silently. Click the named controls for the same actions. Switching resets old item selection, folds and viewport while keeping configuration open.",
+		"Benches uses ↑/↓ to choose sections while section labels have focus; Enter/→ focuses the list, then arrows/j/k choose a Bench and Enter selects it. n creates an empty named Bench and highlights its native returned name after refresh without selecting it; press Enter on the list to select explicitly. Names retain spaces and Unicode. Pending list reads coalesce; the last admitted list stays usable for exact guarded actions while refreshing. A failed same-origin read remains visible with a stale-list warning; r retries the list only. Every deletion, even an empty Bench, shows its exact name, saved pins and queries, then Yes/Cancel. Default is protected. Staged work survives; deleting the current Bench falls back to default. A stale target or contents digest requires a fresh list and new confirmation; nothing is retried silently. Click the named controls for the same actions. Switching resets old item selection, folds and viewport while keeping configuration open.",
 		"s syncs only this Bench; r refreshes cached membership. 3 opens Review; review never pins or applies. Ctrl+R reconnects after an origin change. Ctrl+C always quits.",
 	}
 	rt.drawOverlay(out, cols, visible, lines, []struct{ text, action string }{{"[Close help]", "cancel"}})
