@@ -112,13 +112,6 @@ jobs:
           foreach ($name in @('AZURE_SIGNING_CLIENT_ID', 'AZURE_SIGNING_TENANT_ID', 'AZURE_SIGNING_SUBSCRIPTION_ID')) {
             if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing required signing configuration: $name" }
           }
-      - name: Azure login for existing Trusted Signing identity
-        if: matrix.goos == 'windows'
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
       - name: Go suite on target host
         run: go test ./...
       - name: Build native release regression assemblies
@@ -153,6 +146,13 @@ jobs:
             $linkerOptions = @('-p:UseLdClassicXCodeLinker=false')
           }
           dotnet publish src/Twig/Twig.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishAot=true -p:PublishTrimmed=true -p:StripSymbols=true -o ../build/native @linkerOptions
+      - name: Azure login for existing Trusted Signing identity
+        if: matrix.goos == 'windows'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
       - name: Sign both browsers and the private native companion
         if: matrix.goos == 'windows'
         uses: azure/trusted-signing-action@v0.5.1
