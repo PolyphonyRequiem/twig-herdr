@@ -30,7 +30,7 @@ PLATFORMS = {
 CAPABILITIES = (
     (("workspace",), ("--include-browser", "--expect-binding", "--expect-identity")),
     (("bench", "configuration"), ("--expect-bench", "--expect-binding", "--expect-identity")),
-    (("bench", "detail"), ("--width", "--expect-bench", "--expect-binding", "--expect-identity")),
+    (("bench", "detail"), ("--width", "--sync", "--expect-bench", "--expect-binding", "--expect-identity")),
     (("bench", "configuration", "area", "candidates"), ("--expect-bench", "--expect-binding", "--expect-identity")),
     (("bench", "configuration", "area", "add"), ("--expect-bench", "--expect-binding", "--expect-identity", "--expect-settings")),
     (("bench", "configuration", "sprint", "remove"), ("--expect-bench", "--expect-binding", "--expect-identity", "--expect-settings")),
