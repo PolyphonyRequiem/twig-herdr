@@ -37,6 +37,8 @@ host admission plus --include-browser, --expect-bench, --expect-binding,
 bench list --include-management v1, and workspace untrack ID --mode single|tree.
 No ANSI identity scraping or auth fallback is used.
 New benches open in Tree view; explicit Table choices are preserved.
+The persistent header has two rows: Org/Project, Team, Bench and User above mode,
+worktree and Git branch. Herdr workspace/tab/pane handles sit at the lower-right.
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k or up/down select local work items (not twig set), left/right collapse/expand,
 Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
@@ -141,7 +143,11 @@ func run(args []string) error {
 			return err
 		}
 		defer stop()
-		return panel.Run(panel.Config{Cwd: source.Cwd, InitialView: view}, requests)
+		return panel.Run(panel.Config{
+			Cwd:          source.Cwd,
+			InitialView:  view,
+			HerdrContext: fmt.Sprintf("Herdr: %s / %s / %s", source.WorkspaceID, source.TabID, source.PaneID),
+		}, requests)
 	}
 	if command != "open" && command != "table" && command != "tree" && command != "review" && command != "exit-review" && command != "status" && command != "reconnect" {
 		return fmt.Errorf("unknown command %q (use --help)", command)

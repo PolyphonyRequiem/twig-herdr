@@ -18,6 +18,9 @@ Usage:
 
 Uses the current directory's Twig workspace and current bench by default.
 Requires twig on PATH; does not require Herdr or any Herdr environment variables.
+The persistent header shows Org/Project, Team, Bench and User on its first row;
+mode, worktree and Git branch on its second. Inside Herdr, captured workspace/tab/pane
+handles appear at the lower-right when all three environment handles are available.
 Semantic Bench reads, pins, configuration and scoped sync prefer twig-bench-native.exe
 beside this browser (twig-bench-native on Unix); otherwise Twig must support browser
 v1/configuration v1 JSON, --include-browser, --expect-bench, --expect-binding,
@@ -101,5 +104,21 @@ func run(args []string) error {
 		requests <- panel.Request{Command: "review", File: *file}
 		initialView = "tree"
 	}
-	return panel.Run(panel.Config{Cwd: root, InitialView: initialView, Standalone: true}, requests)
+	return panel.Run(panel.Config{
+		Cwd:          root,
+		InitialView:  initialView,
+		Standalone:   true,
+		HerdrContext: herdrContext(),
+	}, requests)
+}
+
+func herdrContext() string {
+	if os.Getenv("HERDR_ENV") != "1" {
+		return ""
+	}
+	workspace, tab, pane := os.Getenv("HERDR_WORKSPACE_ID"), os.Getenv("HERDR_TAB_ID"), os.Getenv("HERDR_PANE_ID")
+	if workspace == "" || tab == "" || pane == "" {
+		return ""
+	}
+	return fmt.Sprintf("Herdr: %s / %s / %s", workspace, tab, pane)
 }

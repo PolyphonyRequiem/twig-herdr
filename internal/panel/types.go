@@ -4,6 +4,8 @@ package panel
 type Config struct {
 	Cwd         string
 	InitialView string
+	// HerdrContext contains captured workspace/tab/pane handles, when available.
+	HerdrContext string
 	// Standalone uses connection status checks instead of qualified host snapshots.
 	Standalone bool
 }

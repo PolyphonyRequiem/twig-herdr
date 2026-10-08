@@ -3,12 +3,15 @@ package panel
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 )
+
+// Content uses zero-based terminal coordinates; ANSI cursor rows add one.
+const contentStartRow = 3
+const panelChromeRows = contentStartRow + 2
 
 func (rt *runtime) contentSize() (int, int) {
 	return rt.contentCols(), rt.contentRows()
@@ -65,6 +68,11 @@ func (rt *runtime) draw() {
 	drawBar(&out, rt.headerText(), cols, barStyle)
 	if rows >= 3 {
 		out.WriteString("\x1b[2;1H\x1b[2K")
+		left, right := rt.contextHeaderText()
+		drawContextBar(&out, left, right, cols, barStyle)
+	}
+	if rows >= panelChromeRows {
+		out.WriteString("\x1b[3;1H\x1b[2K")
 		drawDivider(&out, cols, dividerStyle)
 	}
 	truncated := false
@@ -74,7 +82,7 @@ func (rt *runtime) draw() {
 		offset := max(0, min(rt.offsets["review"], maxOffset(sess, contentRows)))
 		rt.offsets["review"] = offset
 		for row := range contentRows {
-			fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", row+3)
+			fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", row+contentStartRow+1)
 			if sess != nil && sess.term != nil && sess.hasData {
 				out.WriteString(sessionLine(sess, offset+row, cols).Render())
 			} else if row == 0 {
@@ -83,7 +91,7 @@ func (rt *runtime) draw() {
 		}
 	} else if rt.reconnectRequired {
 		if contentRows > 0 {
-			out.WriteString("\x1b[3;1H")
+			fmt.Fprintf(&out, "\x1b[%d;1H", contentStartRow+1)
 			out.WriteString(ansi.Truncate("Prior binding data unavailable. Ctrl+R explicitly reconnects.", cols, "…"))
 		}
 	} else {
@@ -121,7 +129,7 @@ func (rt *runtime) draw() {
 
 // drawBar fills the entire terminal row so the chrome stays distinct even when
 // the label is short. The caller supplies trusted styles; text is sanitized by
-// headerText/footerText before reaching this function.
+// headerText/contextHeaderText/footerText before reaching this function.
 func drawBar(out *strings.Builder, text string, width int, style string) {
 	out.WriteString(style)
 	clipped := ansi.Truncate(text, width, "…")
@@ -131,6 +139,25 @@ func drawBar(out *strings.Builder, text string, width int, style string) {
 	for n := ansi.StringWidth(clipped); n < width; n++ {
 		out.WriteByte(' ')
 	}
+	out.WriteString("\x1b[0m")
+}
+
+// Herdr context occupies at most half the row, leaving mode and worktree first.
+func drawContextBar(out *strings.Builder, left, right string, width int, style string) {
+	if right == "" || width < 2 {
+		drawBar(out, left, width, style)
+		return
+	}
+	right = ansi.Truncate(right, width/2, "…")
+	rightWidth := ansi.StringWidth(right)
+	left = ansi.Truncate(left, width-rightWidth-1, "…")
+	out.WriteString(style)
+	out.WriteString(left)
+	out.WriteString(style)
+	for n := ansi.StringWidth(left); n < width-rightWidth; n++ {
+		out.WriteByte(' ')
+	}
+	out.WriteString(right)
 	out.WriteString("\x1b[0m")
 }
 
@@ -219,20 +246,6 @@ func (rt *runtime) headerText() string {
 	if bench == "" {
 		bench = "loading"
 	}
-	view := "Table"
-	if rt.benchView == "tree" {
-		view = "Tree"
-	}
-	if rt.configuration != nil || rt.form != nil {
-		view = "Bench Configuration"
-	}
-	if rt.mode == "review" {
-		view = "Review (snapshot)"
-	}
-	subject := rt.cfg.Cwd
-	if rt.reviewFile != "" {
-		subject = filepath.Base(rt.reviewFile)
-	}
 	account := strings.TrimSpace(rt.binding.Account)
 	if account == "" {
 		account = strings.TrimSpace(rt.binding.IdentityName)
@@ -250,8 +263,8 @@ func (rt *runtime) headerText() string {
 	if connection == "" {
 		connection = "Connection unavailable"
 	}
-	// Reserve room for both connection and current Bench before optional context,
-	// account, view and cwd. Never expose storage/attachment IDs as labels.
+	// Reserve room for connection, Team and current Bench before account text.
+	// Never expose storage/attachment IDs as labels.
 	width := max(rt.size.cols, 1)
 	labelWidth := max((width-36)/3, 1)
 	connection = ansi.Truncate(connection, labelWidth, "…")
@@ -267,8 +280,7 @@ func (rt *runtime) headerText() string {
 		team = "not configured"
 	}
 	team = ansi.Truncate(safe(team), labelWidth, "…")
-	header := fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Team: %s · Bench: \x1b[1m%s\x1b[22m · User: %s", connection, team, bench, safe(account))
-	return header + " · " + safe(view) + " · \x1b[2m" + safe(subject) + "\x1b[22m"
+	return fmt.Sprintf("\x1b[1;38;2;154;218;250m%s\x1b[22;38;2;177;217;239m · Team: %s · Bench: \x1b[1m%s\x1b[22m · User: %s", connection, team, bench, safe(account))
 }
 
 func (rt *runtime) footerText(truncated bool) string {
@@ -404,7 +416,7 @@ func (rt *runtime) drawBrowserRows(out *strings.Builder, cols, visible int) {
 	offset := max(0, min(rt.offsets[rt.benchView], max(len(b.lines)-visible, 0)))
 	rt.offsets[rt.benchView] = offset
 	for y := range visible {
-		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+3)
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+contentStartRow+1)
 		index := offset + y
 		if index >= len(b.lines) {
 			if y == 0 {
@@ -432,9 +444,9 @@ func (rt *runtime) drawBrowserRows(out *strings.Builder, cols, visible int) {
 		out.WriteString("\x1b[0m")
 		if line.disclosure >= 0 {
 			x := line.disclosure + 2
-			rt.hits = append(rt.hits, hitTarget{x1: x, x2: min(x+2, cols), y: y + 2, action: "fold", row: line.row})
+			rt.hits = append(rt.hits, hitTarget{x1: x, x2: min(x+2, cols), y: y + contentStartRow, action: "fold", row: line.row})
 		}
-		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + 2, action: "select", row: line.row})
+		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + contentStartRow, action: "select", row: line.row})
 	}
 }
 
@@ -462,7 +474,7 @@ func (rt *runtime) drawOverlay(out *strings.Builder, cols, visible int, paragrap
 	rt.overlayMax = max(len(lines)-max(textRows, 1), 0)
 	rt.overlayOffset = max(0, min(rt.overlayOffset, rt.overlayMax))
 	for y := range min(textRows, len(lines)-rt.overlayOffset) {
-		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+3)
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+contentStartRow+1)
 		out.WriteString(ansi.Truncate(lines[rt.overlayOffset+y], cols, ""))
 	}
 	for i, button := range buttons {
@@ -470,9 +482,9 @@ func (rt *runtime) drawOverlay(out *strings.Builder, cols, visible int, paragrap
 		if y >= visible {
 			break
 		}
-		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K\x1b[1;38;2;154;218;250m", y+3)
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K\x1b[1;38;2;154;218;250m", y+contentStartRow+1)
 		out.WriteString(ansi.Truncate(button.text, cols, "…"))
 		out.WriteString("\x1b[0m")
-		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + 2, action: button.action})
+		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + contentStartRow, action: button.action})
 	}
 }

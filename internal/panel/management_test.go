@@ -313,6 +313,9 @@ func TestConnectionHeaderKeepsNativeContextWithoutAuthorityIDs(t *testing.T) {
 	if strings.Contains(header, "default-id") || strings.Contains(header, "(cached)") {
 		t.Fatal("header leaked internal identity/cache qualification")
 	}
+	if strings.Contains(header, rt.cfg.Cwd) || strings.Contains(header, "Tree") || strings.Contains(header, "Table") {
+		t.Fatal("connection row mixed navigation or worktree context into native metadata")
+	}
 	rt.binding.Team = ""
 	rt.size.cols = 32
 	narrow := ansi.Truncate(ansi.Strip(rt.headerText()), 32, "…")
@@ -320,11 +323,8 @@ func TestConnectionHeaderKeepsNativeContextWithoutAuthorityIDs(t *testing.T) {
 		t.Fatal("narrow header prioritized cwd over connection/current Bench")
 	}
 	rt.binding.Organization, rt.binding.Project = "", ""
-	if strings.Contains(rt.headerText(), "/") {
-		// A directory may contain slashes; inspect the connection segment only.
-		if strings.Contains(strings.Split(ansi.Strip(rt.headerText()), " · ")[0], "/") {
-			t.Fatal("missing connection metadata produced an invented org/project")
-		}
+	if strings.Contains(strings.Split(ansi.Strip(rt.headerText()), " · ")[0], "/") {
+		t.Fatal("missing connection metadata produced an invented org/project")
 	}
 }
 

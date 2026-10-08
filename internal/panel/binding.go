@@ -178,6 +178,7 @@ func (rt *runtime) stopForReconnect(err error) {
 	// Drop all prior actor's VT nodes, including scrollback and hidden restore data.
 	// Native proposal files, digests, authorizers and journals remain untouched.
 	rt.reconnectRequired = true
+	rt.cancelGitContext()
 	rt.cancelPins()
 	rt.browser = browserModel{}
 	rt.hits = nil
@@ -312,6 +313,8 @@ func (rt *runtime) handleAdmissionResolved(ev event) {
 	rt.reconnectReason = ""
 	rt.reviewFile = ""
 	rt.mode = "bench"
+	rt.gitContext = gitContext{worktree: rt.cfg.Cwd, branch: "loading"}
+	rt.beginGitContextRefresh()
 	rt.setNotice("Reconnected; fetching under the newly admitted binding", noticeDuration)
 	rt.beginBenchRefresh(reply, true)
 }

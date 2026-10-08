@@ -465,7 +465,7 @@ func TestConfigurationLabelClickAndReviewEditPreserveKeyboardTransitions(t *test
 		rt.openConfiguration()
 		rt.openInput("area", "AB界e\u0301👩\u200d💻Z")
 		captured := rt.form
-		rt.handleMouse(uv.Mouse{X: 1, Y: 2, Button: uv.MouseLeft})
+		rt.handleMouse(uv.Mouse{X: 1, Y: 3, Button: uv.MouseLeft})
 		if rt.form != captured || captured.editor.cursor != len(captured.editor.text) || captured.confirm {
 			t.Fatal("clicking the wrapped Bench label edited or submitted the field")
 		}

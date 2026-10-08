@@ -45,6 +45,28 @@ func TestDrawBarFillsAndClipsToViewportWidth(t *testing.T) {
 	}
 }
 
+func TestContextBarRightAlignsWithoutCrowdingMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, left, right string
+		width             int
+		want              string
+	}{
+		{name: "wide right label", left: "Tree · work", right: "ws界", width: 20, want: "Tree · work     ws界"},
+		{name: "right clipping leaves left half", left: "Tree · Worktree", right: "界界界界界", width: 12, want: "Tree … 界界…"},
+		{name: "joined and combining graphemes", left: "Tree", right: "e\u0301👩\u200d💻", width: 10, want: "Tree   e\u0301👩\u200d💻"},
+		{name: "no host context", left: "Tree", width: 8, want: "Tree    "},
+		{name: "one cell keeps left", left: "Tree", right: "Herdr", width: 1, want: "…"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			drawContextBar(&out, tc.left, tc.right, tc.width, "\x1b[48;2;22;40;59m")
+			if got := ansi.Strip(out.String()); got != tc.want || ansi.StringWidth(got) != tc.width {
+				t.Fatalf("context row = %q (width %d), want %q (width %d)", got, ansi.StringWidth(got), tc.want, tc.width)
+			}
+		})
+	}
+}
+
 func TestDrawDividerFillsViewportWidth(t *testing.T) {
 	var out strings.Builder
 	drawDivider(&out, 8, "\x1b[48;2;22;40;59m")
@@ -54,6 +76,71 @@ func TestDrawDividerFillsViewportWidth(t *testing.T) {
 	}
 	if width := ansi.StringWidth(out.String()); width != 8 {
 		t.Fatalf("divider width = %d, want 8", width)
+	}
+}
+
+func TestSharedHeadersRemainSeparateAcrossSurfaces(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, content, footer string
+	}{
+		{name: "tree", mode: "Tree", content: "ABC界DEF", footer: "[b Bench]"},
+		{name: "table", mode: "Table", content: "Work item", footer: "[b Bench]"},
+		{name: "review", mode: "Review", content: "REVIEW CONTENT", footer: "REVIEW"},
+		{name: "help", mode: "Tree", content: "Bench browser", footer: "[Close]"},
+		{name: "configuration", mode: "Bench Configuration", content: "[1 Pins]", footer: "Sections:"},
+		{name: "form", mode: "Bench Configuration", content: "Add area", footer: "[OK]"},
+		{name: "monochrome tree", mode: "Tree", content: "ABC界DEF", footer: "[b Bench]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, snapshot := browserFixture(t)
+			rt.size = size{cols: 160, rows: 16}
+			rt.binding.Organization, rt.binding.Project, rt.binding.Team = "Org", "Project", "Team"
+			rt.binding.Account, rt.benchSummary = "person@example.com", "Bench"
+			rt.cfg.HerdrContext = "Herdr ws界/tab/pane"
+			rt.notice = "NOTICE"
+			switch tc.name {
+			case "table":
+				rt.benchView = "table"
+			case "review":
+				rt.mode, rt.reviewFile = "review", "proposal.json"
+				rt.review.session = &session{kind: "review", term: vt.NewEmulator(160, 11), hasData: true}
+				_, _ = rt.review.session.term.WriteString("REVIEW CONTENT")
+			case "help":
+				rt.showBrowserHelp = true
+			case "configuration":
+				rt.configuration = &configurationView{benchID: snapshot.BenchID, sectionsFocused: true}
+			case "form":
+				rt.form = &configurationForm{kind: "area", benchName: snapshot.BenchName, editor: newTextEditor("Alpha")}
+			case "monochrome tree":
+				t.Setenv("NO_COLOR", "")
+			}
+			output := captureStdout(t, rt.draw)
+			if tc.name == "monochrome tree" && labelSGR.MatchString(output) {
+				t.Fatal("NO_COLOR left styled header or content output")
+			}
+			pane := vt.NewEmulator(160, 16)
+			_, _ = pane.WriteString(output)
+			rows := strings.Split(pane.String(), "\n")
+			if len(rows) != 16 {
+				t.Fatalf("visible screen rows = %d, want 16", len(rows))
+			}
+			for _, text := range []string{"Org/Project", "Team: Team", "Bench: Bench", "User: person@example.com"} {
+				if !strings.Contains(rows[0], text) {
+					t.Fatalf("connection row lost %q: %q", text, rows[0])
+				}
+			}
+			if !strings.HasPrefix(rows[1], tc.mode) || !strings.Contains(rows[1], "Worktree:") || !strings.Contains(rows[1], "Branch:") || !strings.HasSuffix(rows[1], rt.cfg.HerdrContext) || ansi.StringWidth(rows[1]) != 160 {
+				t.Fatalf("context row was clipped, misplaced or not right aligned: %q", rows[1])
+			}
+			if rows[2] != strings.Repeat("─", 160) || !strings.Contains(rows[3], tc.content) || rows[14] != "NOTICE" || !strings.Contains(rows[15], tc.footer) {
+				t.Fatalf("headers, content, notice or controls collided: %q", pane.String())
+			}
+			for _, hit := range rt.hits {
+				if hit.y < 3 || hit.y == 14 || hit.y >= 16 {
+					t.Fatalf("mouse target overlaps chrome or lies outside the panel: %+v", hit)
+				}
+			}
+		})
 	}
 }
 
@@ -371,9 +458,12 @@ func TestReviewResizeClampsChromeAndChildViewport(t *testing.T) {
 		wantRows        []int
 		wantMissing     int
 	}{
-		{name: "three-row terminal keeps header and footer visible", rows: 3, wantSessionRows: 1, wantRows: []int{1, 2, 3}, wantMissing: 4},
-		{name: "tall view keeps four chrome rows and content visible", rows: 7, wantSessionRows: 3, wantRows: []int{1, 2, 3, 4, 5, 6, 7}, wantMissing: 8},
-		{name: "short view keeps header and footer visible without overflow", rows: 4, wantSessionRows: 1, wantRows: []int{1, 2, 3, 4}, wantMissing: 5},
+		{name: "one-row terminal only shows connection", rows: 1, wantSessionRows: 1, wantRows: []int{1}, wantMissing: 2},
+		{name: "two-row terminal keeps footer separate", rows: 2, wantSessionRows: 1, wantRows: []int{1, 2}, wantMissing: 3},
+		{name: "three-row terminal keeps both headers and footer", rows: 3, wantSessionRows: 1, wantRows: []int{1, 2, 3}, wantMissing: 4},
+		{name: "four-row terminal replaces divider with notice", rows: 4, wantSessionRows: 1, wantRows: []int{1, 2, 3, 4}, wantMissing: 5},
+		{name: "five-row terminal has chrome but no content", rows: 5, wantSessionRows: 1, wantRows: []int{1, 2, 3, 4, 5}, wantMissing: 6},
+		{name: "tall view reserves five chrome rows", rows: 7, wantSessionRows: 2, wantRows: []int{1, 2, 3, 4, 5, 6, 7}, wantMissing: 8},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := newRuntime(Config{Cwd: t.TempDir()})
@@ -382,6 +472,7 @@ func TestReviewResizeClampsChromeAndChildViewport(t *testing.T) {
 			rt.reviewFile = "/tmp/proposal.json"
 			rt.size = size{cols: 40, rows: tc.rows}
 			rt.review.session = &session{kind: "review", ready: true, hasData: true, cols: 40, rows: 8, term: vt.NewEmulator(40, 8)}
+			rt.notice = "NOTICE"
 			rt.offsets["review"] = 99
 			output := captureStdout(t, func() { rt.handleAdmittedResize(size{cols: 40, rows: tc.rows}) })
 			if got := rt.review.session.rows; got != tc.wantSessionRows {
@@ -394,6 +485,21 @@ func TestReviewResizeClampsChromeAndChildViewport(t *testing.T) {
 			}
 			if strings.Contains(output, rowMarker(tc.wantMissing)) {
 				t.Fatalf("output wrote row %d off-screen: %q", tc.wantMissing, output)
+			}
+			pane := vt.NewEmulator(40, tc.rows)
+			_, _ = pane.WriteString(output)
+			screen := strings.Split(pane.String(), "\n")
+			if len(screen) != tc.rows {
+				t.Fatalf("visible rows = %d, want %d", len(screen), tc.rows)
+			}
+			if tc.rows >= 3 && !strings.HasPrefix(screen[1], "Review") {
+				t.Fatalf("context header collided with other chrome: %q", screen[1])
+			}
+			if tc.rows >= 4 && screen[tc.rows-2] != "NOTICE" {
+				t.Fatalf("notice collided with divider or content: %q", screen[tc.rows-2])
+			}
+			if tc.rows >= 2 && !strings.Contains(screen[tc.rows-1], "REVIEW") {
+				t.Fatalf("footer collided with header or notice: %q", screen[tc.rows-1])
 			}
 		})
 	}
@@ -408,21 +514,21 @@ func TestReviewScrollUsesVisibleViewportRows(t *testing.T) {
 	rt.review.session = &session{kind: "review", ready: true, hasData: true, cols: 40, rows: 8, term: vt.NewEmulator(40, 8)}
 	rt.offsets["review"] = 0
 	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
-	if got := rt.offsets["review"]; got != 2 {
-		t.Fatalf("page down offset = %d, want 2", got)
+	if got := rt.offsets["review"]; got != 1 {
+		t.Fatalf("page down offset = %d, want 1", got)
 	}
 	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyEnd}))
 	if got, want := rt.offsets["review"], rt.maxOffsetForCurrentSession(); got != want {
 		t.Fatalf("end offset = %d, want %d", got, want)
 	}
-	rt.size = size{cols: 40, rows: 5}
+	rt.size = size{cols: 40, rows: 6}
 	rt.offsets["review"] = 0
 	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
 	if got := rt.offsets["review"]; got != 1 {
 		t.Fatalf("single-row viewport page down offset = %d, want 1", got)
 	}
 
-	rt.size = size{cols: 40, rows: 4}
+	rt.size = size{cols: 40, rows: 5}
 	rt.offsets["review"] = 5
 	rt.handleAdmittedKey(uv.KeyPressEvent(uv.Key{Code: uv.KeyPgDown}))
 	if got := rt.offsets["review"]; got != 0 {

@@ -72,7 +72,7 @@ func TestSemanticReadCannotReplaceSnapshotOnFailureOrStaleGeneration(t *testing.
 func TestLogicalSelectionFoldAndContinuationMouseHit(t *testing.T) {
 	rt, _ := browserFixture(t)
 	rt.size = size{cols: 18, rows: 16}
-	captureStdout(t, func() { rt.draw(); rt.handleMouse(uv.Mouse{X: 3, Y: 3, Button: uv.MouseLeft}) })
+	captureStdout(t, func() { rt.draw(); rt.handleMouse(uv.Mouse{X: 3, Y: 4, Button: uv.MouseLeft}) })
 	if rt.browser.selectedID != 1 || rt.browser.collapsed["root/1"] {
 		t.Fatal("a continuation click toggled the disclosure or selected another logical item")
 	}
@@ -84,7 +84,7 @@ func TestLogicalSelectionFoldAndContinuationMouseHit(t *testing.T) {
 	if rt.browser.selectedID != 1 {
 		t.Fatal("left on a leaf did not select its parent")
 	}
-	captureStdout(t, func() { rt.handleMouse(uv.Mouse{X: 2, Y: 2, Button: uv.MouseLeft}) })
+	captureStdout(t, func() { rt.handleMouse(uv.Mouse{X: 2, Y: 3, Button: uv.MouseLeft}) })
 	if !rt.browser.collapsed["root/1"] {
 		t.Fatal("the disclosure click did not collapse the same item as keyboard left")
 	}

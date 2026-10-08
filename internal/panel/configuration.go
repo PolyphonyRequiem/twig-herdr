@@ -844,7 +844,7 @@ func (rt *runtime) configurationLineStyle(line configurationLine) string {
 
 func (rt *runtime) drawConfigurationLines(out *strings.Builder, cols, visible int, lines []configurationLine, offset int) {
 	for y := range visible {
-		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+3)
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+contentStartRow+1)
 		if offset+y >= len(lines) {
 			continue
 		}
@@ -858,17 +858,17 @@ func (rt *runtime) drawConfigurationLines(out *strings.Builder, cols, visible in
 			for len(text) > 0 && column < cols {
 				cluster, width := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
 				if width > 0 {
-					rt.hits = append(rt.hits, hitTarget{x1: column, x2: min(column+width, cols), y: y + 2, action: "config-field", row: line.fieldCursors[offset]})
+					rt.hits = append(rt.hits, hitTarget{x1: column, x2: min(column+width, cols), y: y + contentStartRow, action: "config-field", row: line.fieldCursors[offset]})
 				}
 				column += width
 				offset += len(cluster)
 				text = text[len(cluster):]
 			}
 			if column < cols {
-				rt.hits = append(rt.hits, hitTarget{x1: column, x2: cols, y: y + 2, action: "config-field", row: line.fieldCursors[len(line.text)]})
+				rt.hits = append(rt.hits, hitTarget{x1: column, x2: cols, y: y + contentStartRow, action: "config-field", row: line.fieldCursors[len(line.text)]})
 			}
 		} else if line.action != "" {
-			rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + 2, action: "config-" + line.action, row: line.row})
+			rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + contentStartRow, action: "config-" + line.action, row: line.row})
 		}
 	}
 }

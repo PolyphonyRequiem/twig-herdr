@@ -65,22 +65,25 @@ type runtime struct {
 	syncCancel           context.CancelFunc
 	syncGen              uint64
 
-	benchSummary    string
-	offsets         map[string]int
-	nativePath      string
-	browser         browserModel
-	pinAction       *pinAction
-	configuration   *configurationView
-	form            *configurationForm
-	management      managementState
-	benchOperation  *benchOperation
-	mutationLabel   string
-	showBrowserHelp bool
-	overlayOffset   int
-	overlayMax      int
-	hits            []hitTarget
-	pinCancel       context.CancelFunc
-	pinGen          uint64
+	benchSummary     string
+	offsets          map[string]int
+	nativePath       string
+	browser          browserModel
+	gitContext       gitContext
+	gitContextCancel context.CancelFunc
+	gitContextGen    uint64
+	pinAction        *pinAction
+	configuration    *configurationView
+	form             *configurationForm
+	management       managementState
+	benchOperation   *benchOperation
+	mutationLabel    string
+	showBrowserHelp  bool
+	overlayOffset    int
+	overlayMax       int
+	hits             []hitTarget
+	pinCancel        context.CancelFunc
+	pinGen           uint64
 
 	bench struct {
 		launchCancel context.CancelFunc
@@ -158,6 +161,7 @@ const (
 	evPinDone
 	evManagementLoaded
 	evBenchOperationDone
+	evGitContextLoaded
 )
 
 type event struct {
@@ -167,6 +171,7 @@ type event struct {
 	key        uv.KeyPressEvent
 	mouse      uv.Mouse
 	browser    *BrowserSnapshot
+	gitContext gitContext
 	syncResult *benchSyncResult
 	management *benchManagement
 
@@ -214,6 +219,7 @@ func newRuntime(cfg Config) *runtime {
 		cfg:            cfg,
 		latestProposal: latestProposal,
 		nativePath:     companionPath(),
+		gitContext:     gitContext{worktree: cfg.Cwd, branch: "loading"},
 		mode:           "bench",
 		benchView:      cfg.InitialView,
 		offsets:        map[string]int{"table": 0, "tree": 0, "review": 0},
@@ -245,6 +251,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 		return admissionErr
 	}
 	rt.binding = binding
+	rt.beginGitContextRefresh()
 
 	fmt.Fprint(os.Stdout, "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
 
@@ -271,6 +278,8 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleMouse(ev.mouse)
 			case evBrowserLoaded:
 				rt.handleBrowserLoaded(ev)
+			case evGitContextLoaded:
+				rt.handleGitContextLoaded(ev)
 			case evPinDone:
 				rt.handlePinDone(ev)
 			case evManagementLoaded:
@@ -281,6 +290,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleResize(ev.size)
 			case evBenchTick:
 				if !rt.closing && !rt.reconnectRequired {
+					rt.beginGitContextRefresh()
 					if rt.mode == "review" {
 						rt.checkAdmission(nil, false)
 					} else if rt.cfg.Standalone {
@@ -1336,7 +1346,7 @@ func (rt *runtime) panelSize() size {
 }
 
 func (rt *runtime) contentRows() int {
-	rows := rt.size.rows - 4
+	rows := rt.size.rows - panelChromeRows
 	if rows < 1 {
 		rows = 1
 	}
@@ -1344,7 +1354,7 @@ func (rt *runtime) contentRows() int {
 }
 
 func (rt *runtime) contentVisibleRows() int {
-	rows := rt.size.rows - 4
+	rows := rt.size.rows - panelChromeRows
 	if rows < 0 {
 		rows = 0
 	}
@@ -1499,6 +1509,7 @@ func safe(text string) string {
 func (rt *runtime) shutdown() {
 	rt.onceShutdown(func() {
 		rt.closing = true
+		rt.cancelGitContext()
 		rt.cancelPins()
 		if rt.admissionCancel != nil {
 			rt.admissionCancel()
