@@ -11,10 +11,13 @@ import (
 	"github.com/PolyphonyRequiem/twig-herdr/internal/panel"
 )
 
+var version = "0.3.0"
+
 const help = `Twig Bench TUI — standalone workspace and proposal browser
 
 Usage:
   twig-bench-tui [--cwd PATH] [--view tree|table|review] [--file PATH]
+  twig-bench-tui --version
 
 Uses the current directory's Twig workspace and current bench by default.
 Requires twig on PATH; does not require Herdr or any Herdr environment variables.
@@ -75,10 +78,11 @@ func main() {
 
 func run(args []string) error {
 	flags := flag.NewFlagSet("twig-bench-tui", flag.ContinueOnError)
-	flags.Usage = func() { fmt.Fprint(flags.Output(), help) }
+	flags.Usage = func() { fmt.Fprint(os.Stdout, help) }
 	cwd := flags.String("cwd", ".", "Twig workspace directory")
 	view := flags.String("view", "tree", "initial view: tree, table, review")
 	file := flags.String("file", "", "proposal to review")
+	showVersion := flags.Bool("version", false, "print release version")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -87,6 +91,10 @@ func run(args []string) error {
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	if *showVersion {
+		fmt.Println(version)
+		return nil
 	}
 	if *view != "tree" && *view != "table" && *view != "review" {
 		return fmt.Errorf("unknown view %q: use tree, table, or review", *view)

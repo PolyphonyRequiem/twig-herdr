@@ -2,7 +2,7 @@ id = "twig-herdr"
 name = "Twig bench"
 version = "0.3.0"
 min_herdr_version = "0.9.0"
-description = "Native Twig Tree/Table and digest-bound read-only Review. Requires Twig qualified-attachment-snapshot-v1: connection host-snapshot JSON, --connection-snapshot on bench/workspace/proposal operations, and digest-guarded interactive proposal preview. Actor changes require explicit reconnect. Upgrade CLI/plugin together; close legacy hosts and verify native quiescence before migration."
+description = "Twig Tree/Table, semantic Bench configuration and digest-bound read-only Review. Includes a private native companion for browser/configuration v1, captured-origin/settings guards, type-specific unpinning and contents-guarded Bench lifecycle operations; normal Twig remains proposal authority. Close old hosts before upgrading, migrate workspaces only explicitly with Twig, and acknowledge/reconnect after actor or attachment changes. Installation never replaces normal Twig or migrates user data."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]

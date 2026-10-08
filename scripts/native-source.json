@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "repository": "PolyphonyRequiem/twig",
+  "ref": "bench-companion-v0.3.0",
+  "commit": "1b39184bbfdabe4af8bc88381483a89efcff2558",
+  "dotnetSdk": "11.0.100-rc.1.26425.128"
+}
