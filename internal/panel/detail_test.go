@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -298,7 +299,9 @@ func detailNativeFixture(t *testing.T, seed bool) (*runtime, string) {
 		name += ".exe"
 	}
 	rt.nativePath = filepath.Join(dir, name)
-	if err := os.Link(executable, rt.nativePath); err != nil {
+	// Windows runner image locks can prevent removing an executable hardlink.
+	// Use an independently owned fixture image there; retain cheap Unix links.
+	if goruntime.GOOS == "windows" || os.Link(executable, rt.nativePath) != nil {
 		source, err := os.Open(executable)
 		if err != nil {
 			t.Fatal(err)
