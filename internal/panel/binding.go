@@ -179,6 +179,8 @@ func (rt *runtime) stopForReconnect(err error) {
 	// Native proposal files, digests, authorizers and journals remain untouched.
 	rt.reconnectRequired = true
 	rt.cancelGitContext()
+	rt.cancelDetail()
+	rt.cancelTeamAreas()
 	rt.cancelPins()
 	rt.browser = browserModel{}
 	rt.hits = nil
@@ -308,6 +310,8 @@ func (rt *runtime) handleAdmissionResolved(ev event) {
 		return
 	}
 	rt.binding = ev.binding
+	rt.cancelDetail()
+	rt.cancelTeamAreas()
 	rt.reconnectRequired = false
 	rt.benchSummary = "loading"
 	rt.reconnectReason = ""

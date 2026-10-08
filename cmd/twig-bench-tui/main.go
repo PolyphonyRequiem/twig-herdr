@@ -11,7 +11,7 @@ import (
 	"github.com/PolyphonyRequiem/twig-herdr/internal/panel"
 )
 
-var version = "0.3.0"
+var version = "0.4.0"
 
 const help = `Twig Bench TUI — standalone workspace and proposal browser
 
@@ -37,9 +37,12 @@ Keys:
   1 workspace table, 2 bench tree, 3 proposal review
   j/k or up/down select work items locally (not twig set), PgUp/PgDn/Home/End navigate
   left/right collapse/expand, Space toggle; click rows/disclosures; wheel scrolls
+  Enter opens full cached read-only item detail; arrows/j/k/PgUp/PgDn/Home/End/wheel scroll
+  HTML fields render with headings, lists, code and tables; Esc restores the same Bench view
   b Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer
   up/down sections; Enter/right items; left sections; Tab or 1/2/3/4 sections
   Areas/Sprints use a add, d remove; Enter reviews/confirms
+  Areas: t opens official configured-team paths; Enter reviews Exact/Under before adding
   Benches: arrows/j/k choose, Enter selects, n creates empty, d/Delete reviews deletion
   Yes/Cancel shows exact saved pins/queries; Default is protected; staged work survives
   Current deletion selects default. Stale contents require a fresh list/reconfirmation.

@@ -18,6 +18,8 @@ SELECTIONS = {
         "WorkspaceCommandTests", "BenchCommandTests", "BenchConfigurationCommandTests",
         "BenchSyncCommandTests", "TrackingCommandTests", "ConnectionBindingReadTests",
         "PatConnectionBindingReadTests", "ConnectionBindingTransitionConsumerTests",
+        "BenchDetailCommandTests", "BenchAreaCandidatesCommandTests", "RichHtmlRendererTests",
+        "FormatterHelpersTests", "ProgressiveHelpTests",
     ),
     "Infrastructure": ("Bench", "Connection"),
     "Domain": ("Bench", "WorkingSetFollowsCurrentBenchTests"),

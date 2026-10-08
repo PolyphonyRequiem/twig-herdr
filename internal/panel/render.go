@@ -96,7 +96,11 @@ func (rt *runtime) draw() {
 		}
 	} else {
 		rt.browser.ensureLayout(rt.benchView, cols)
-		if rt.form != nil {
+		if rt.detail.active {
+			rt.drawDetail(&out, cols, contentRows)
+		} else if rt.teamAreas.open {
+			rt.drawTeamAreas(&out, cols, contentRows)
+		} else if rt.form != nil {
 			rt.drawConfigurationForm(&out, cols, contentRows)
 		} else if rt.showBrowserHelp {
 			rt.drawBrowserHelp(&out, cols, contentRows)
@@ -190,6 +194,10 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 	type button struct{ text, action string }
 	var buttons []button
 	switch {
+	case rt.detail.active:
+		buttons = []button{{"[Esc Back]", "detail-close"}}
+	case rt.teamAreas.open:
+		buttons = []button{{"[Enter Review]", "team-area-confirm"}, {"[r Retry]", "team-area-retry"}, {"[Esc Back]", "team-area-cancel"}}
 	case rt.form != nil:
 		buttons = []button{{"[OK]", "config-confirm"}, {"[Cancel]", "config-cancel"}}
 		if rt.form.kind == "pin" && rt.form.confirm {
@@ -208,6 +216,9 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 		buttons = []button{{"[a Add]", "config-add"}, {"[d Remove]", "config-remove"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
 		if rt.configuration.section == 0 {
 			buttons = []button{{rt.pinButton("single"), "config-pin-single"}, {rt.pinButton("tree"), "config-pin-tree"}, {"[i ID]", "config-manual-id"}, {"[Esc Back]", "config-back"}}
+		}
+		if rt.configuration.section == 1 {
+			buttons = append(buttons, button{"[t Team areas]", "team-area-open"}, button{"[t]", "team-area-open"})
 		}
 		if rt.configuration.section == 3 {
 			buttons = []button{{"[Esc Back]", "config-back"}, {"[Enter Items]", "config-items"}}
@@ -229,7 +240,7 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 			buttons = append(buttons, button{"[a]", "config-add"}, button{"[d]", "config-remove"}, button{"[i]", "config-manual-id"}, button{"[Esc]", "config-back"})
 		}
 	default:
-		buttons = []button{{rt.pinButton("single"), "pin-single"}, {rt.pinButton("tree"), "pin-tree"}, {"[b Bench]", "configure"}, {"[? Help]", "help"}, {"[b]", "configure"}, {"[?]", "help"}}
+		buttons = []button{{"[Enter Detail]", "detail-open"}, {rt.pinButton("single"), "pin-single"}, {rt.pinButton("tree"), "pin-tree"}, {"[b Bench]", "configure"}, {"[? Help]", "help"}, {"[b]", "configure"}, {"[?]", "help"}}
 	}
 	plain := ansi.Strip(rt.footerText(truncated))
 	for _, button := range buttons {
@@ -302,7 +313,7 @@ func (rt *runtime) footerText(truncated bool) string {
 		bits = append(bits, "\x1b[38;2;255;190;105m"+safe(rt.notice)+"\x1b[38;2;152;175;195m")
 	}
 	mode := rt.benchView
-	buttons := rt.pinButton("single") + " " + rt.pinButton("tree") + " [b Bench] [? Help]"
+	buttons := "[Enter Detail] " + rt.pinButton("single") + " " + rt.pinButton("tree") + " [b Bench] [? Help]"
 	if rt.size.cols < 55 {
 		buttons = rt.pinButton("single") + " " + rt.pinButton("tree") + " [b] [?]"
 	}
@@ -314,6 +325,12 @@ func (rt *runtime) footerText(truncated bool) string {
 	if rt.reconnectRequired {
 		mode = "reconnect-required"
 		help = "Ctrl+R acknowledge/reconnect · q close; sync/refresh/view/review disabled"
+	}
+	if rt.detail.active && !rt.reconnectRequired {
+		return "[Esc Back] · read-only detail · ↑/↓/j/k scroll · PgUp/PgDn/Home/End · wheel scroll · " + rt.detailPosition() + " · Ctrl+C quit"
+	}
+	if rt.teamAreas.open && !rt.reconnectRequired {
+		return "[Enter Review] [r Retry] [Esc Back] · team areas · ↑/↓/j/k select · PgUp/PgDn/Home/End · wheel scroll"
 	}
 	if rt.form != nil {
 		if rt.form.kind == "bench" {
@@ -359,6 +376,12 @@ func (rt *runtime) footerText(truncated bool) string {
 		}
 		if rt.configuration.section == 0 {
 			return navigation + " · " + rt.pinButton("single") + " " + rt.pinButton("tree") + " [i ID] [Esc Back] · s sync · r refresh"
+		}
+		if rt.configuration.section == 1 {
+			if rt.size.cols < 55 {
+				return navigation + " · [t] [a] [d] [Esc]"
+			}
+			return navigation + " · [t Team areas] [a Add] [d Remove] [Esc Back] · Tab/1/2/3/4 sections"
 		}
 		if rt.size.cols < 55 {
 			return navigation + " · [a] [d] [Esc]"
@@ -480,9 +503,11 @@ func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
 		"Bench browser — local selection, not twig set",
 		"j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.",
 		"Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.",
+		"Enter opens full cached read-only detail for the selected work item or seed. Arrows/j/k/PgUp/PgDn/Home/End and the wheel scroll independently; Esc returns to the same Bench selection, folds and viewport. HTML headings, lists, code, links and tables render without the preview line cap.",
 		"p toggles the selected item's explicit Single pin; Shift+P toggles its explicit Subtree pin. Both can coexist. Each gesture changes only that kind; other pins, inherited membership, query rules and protected work remain. Inherited-only rows gain their own pin; ancestor pins are never removed. Seeds must be published first.",
 		"The footer shows Pin/Unpin for each kind from native cached explicit pins. Click those named controls for the same action as p/Shift+P. A busy pin action cannot be repeated; native origin, Bench and settings guards refuse stale captures. Membership refreshes from native truth afterward.",
 		"b opens Bench Configuration with Pins / Areas / Sprints / Benches. Tab or 1/2/3/4 chooses a section. Pins uses the same p/Shift+P toggles, including uncached IDs. Areas/Sprints use a add and d remove with review; p/P never pin those entries. Esc returns to the same viewer, selection, folds and viewport.",
+		"In Areas, t opens official configured-team area paths. Select a path and Enter reviews its Exact/Under semantics before adding it. Candidate reads never change the configured team or import workspace area defaults; failed/empty reads stay distinct and r retries.",
 		"Manual IDs exist only in b Bench configuration > Pins > i. Enter validates a positive ID and opens review; p adds Single pin, Shift+P adds Subtree pin immediately. Enter adds the chosen kind. These are add intents, not toggles. Unknown IDs stay uncached/unverified until scoped sync. Text-entry q/c/p/P are text; Esc cancels input first.",
 		"Benches uses ↑/↓ to choose sections while section labels have focus; Enter/→ focuses the list, then arrows/j/k choose a Bench and Enter selects it. n creates an empty named Bench and highlights its native returned name after refresh without selecting it; press Enter on the list to select explicitly. Names retain spaces and Unicode. Pending list reads coalesce; the last admitted list stays usable for exact guarded actions while refreshing. A failed same-origin read remains visible with a stale-list warning; r retries the list only. Every deletion, even an empty Bench, shows its exact name, saved pins and queries, then Yes/Cancel. Default is protected. Staged work survives; deleting the current Bench falls back to default. A stale target or contents digest requires a fresh list and new confirmation; nothing is retried silently. Click the named controls for the same actions. Switching resets old item selection, folds and viewport while keeping configuration open.",
 		"s syncs only this Bench; r refreshes cached membership. 3 opens Review; review never pins or applies. Ctrl+R reconnects after an origin change. Ctrl+C always quits.",

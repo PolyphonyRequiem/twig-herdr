@@ -1,8 +1,8 @@
 id = "twig-herdr"
 name = "Twig bench"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.9.0"
-description = "Twig Tree/Table, semantic Bench configuration and digest-bound read-only Review. Includes a private native companion for browser/configuration v1, captured-origin/settings guards, type-specific unpinning and contents-guarded Bench lifecycle operations; normal Twig remains proposal authority. Close old hosts before upgrading, migrate workspaces only explicitly with Twig, and acknowledge/reconnect after actor or attachment changes. Installation never replaces normal Twig or migrates user data."
+description = "Twig Tree/Table, full scrollable read-only work-item detail, official configured-team area selection and digest-bound proposal Review. Includes a private native companion for captured-origin, Bench/settings and lifecycle guards; normal Twig remains proposal authority. Installation never replaces normal Twig or migrates user data. Close old hosts before upgrading and acknowledge/reconnect after actor or attachment changes."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]

@@ -246,6 +246,8 @@ func (rt *runtime) handleBrowserLoaded(ev event) {
 	}
 	rt.cancelBenchLaunch(nil)
 	rt.browser.replace(ev.browser)
+	rt.reconcileDetail()
+	rt.reconcileTeamAreas()
 	rt.benchSummary = ev.browser.BenchName
 	if rt.configuration != nil && rt.configuration.benchID != ev.browser.BenchID {
 		if rt.configuration.section == 3 || rt.configuration.benchID == "" {
@@ -556,6 +558,10 @@ func (rt *runtime) handleBrowserKey(key uv.KeyPressEvent) bool {
 		rt.draw()
 		return true
 	}
+	if key.MatchString("enter") {
+		rt.openDetail()
+		return true
+	}
 	if key.MatchString("b") {
 		rt.openConfiguration()
 		return true
@@ -835,6 +841,21 @@ func (rt *runtime) handleAdmittedMouse(mouse uv.Mouse) {
 	if rt.closing || rt.reconnectRequired {
 		return
 	}
+	if rt.detail.active && mouse.Button == uv.MouseLeft {
+		for _, hit := range rt.hits {
+			if hit.action == "detail-close" && mouse.Y == hit.y && mouse.X >= hit.x1 && mouse.X < hit.x2 {
+				rt.closeDetail()
+				return
+			}
+		}
+	}
+	if rt.handleDetailMouse(mouse) {
+		return
+	}
+	if rt.teamAreas.open {
+		rt.handleTeamAreasMouse(mouse)
+		return
+	}
 	if rt.form != nil || rt.configuration != nil {
 		rt.handleConfigurationMouse(mouse)
 		return
@@ -874,6 +895,8 @@ func (rt *runtime) handleAdmittedMouse(mouse uv.Mouse) {
 			continue
 		}
 		switch hit.action {
+		case "detail-open":
+			rt.openDetail()
 		case "pin-single":
 			rt.toggleSelectedPin("single")
 		case "pin-tree":

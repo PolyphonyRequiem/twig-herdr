@@ -204,6 +204,7 @@ type configurationForm struct {
 }
 
 func (rt *runtime) leaveConfiguration() {
+	rt.cancelTeamAreas()
 	rt.cancelManagement()
 	rt.management.highlightName = ""
 	rt.configuration, rt.form = nil, nil
@@ -227,6 +228,7 @@ func (rt *runtime) openConfiguration() {
 		return
 	}
 	rt.cancelQueuedViews()
+	rt.cancelDetail()
 	rt.cancelReviewLookup(errors.New("Review superseded by Bench configuration"))
 	rt.form, rt.showBrowserHelp = nil, false
 	rt.configuration = &configurationView{benchID: snapshot.BenchID, sectionsFocused: true}
@@ -417,6 +419,10 @@ func (rt *runtime) handleConfigurationKey(key uv.KeyPressEvent) {
 			rt.selectManagedBench()
 		} else {
 			rt.addConfigurationSelection()
+		}
+	case key.MatchString("t"):
+		if c.section == 1 {
+			rt.openTeamAreas()
 		}
 	case key.MatchString("a", "n"):
 		if !key.MatchString("n") || c.section == 3 {
@@ -1053,6 +1059,8 @@ func (rt *runtime) handleConfigurationMouse(mouse uv.Mouse) {
 			}
 		} else if rt.configuration != nil {
 			switch hit.action {
+			case "team-area-open":
+				rt.openTeamAreas()
 			case "config-section":
 				rt.configuration.sectionsFocused = false
 				rt.chooseSection(hit.row)

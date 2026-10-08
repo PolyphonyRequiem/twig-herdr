@@ -171,6 +171,8 @@ native="$stage/twig-bench-native/twig-bench-native"
   assert_help '--mode --expect-bench --expect-settings --expect-binding --expect-identity' workspace untrack &&
   assert_help '--expect-bench --expect-binding --expect-identity' workspace sync &&
   assert_help '--expect-bench --expect-binding --expect-identity' bench configuration &&
+  assert_help '--width --expect-bench --expect-binding --expect-identity' bench detail &&
+  assert_help '--expect-bench --expect-binding --expect-identity' bench configuration area candidates &&
   assert_help '--expect-bench --expect-settings --expect-binding --expect-identity' bench configuration area add &&
   assert_help '--expect-bench --expect-settings --expect-binding --expect-identity' bench configuration sprint remove &&
   assert_help '--include-management --expect-binding --expect-identity' bench list &&

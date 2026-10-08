@@ -153,6 +153,8 @@ try {
         Assert-Help $native @('workspace', 'untrack') @('--mode', '--expect-bench', '--expect-settings', '--expect-binding', '--expect-identity')
         Assert-Help $native @('workspace', 'sync') @('--expect-bench', '--expect-binding', '--expect-identity')
         Assert-Help $native @('bench', 'configuration') @('--expect-bench', '--expect-binding', '--expect-identity')
+        Assert-Help $native @('bench', 'detail') @('--width', '--expect-bench', '--expect-binding', '--expect-identity')
+        Assert-Help $native @('bench', 'configuration', 'area', 'candidates') @('--expect-bench', '--expect-binding', '--expect-identity')
         Assert-Help $native @('bench', 'configuration', 'area', 'add') @('--expect-bench', '--expect-settings', '--expect-binding', '--expect-identity')
         Assert-Help $native @('bench', 'configuration', 'sprint', 'remove') @('--expect-bench', '--expect-settings', '--expect-binding', '--expect-identity')
         Assert-Help $native @('bench', 'list') @('--include-management', '--expect-binding', '--expect-identity')

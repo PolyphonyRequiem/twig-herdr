@@ -84,6 +84,8 @@ type runtime struct {
 	hits             []hitTarget
 	pinCancel        context.CancelFunc
 	pinGen           uint64
+	detail           detailState
+	teamAreas        teamAreaState
 
 	bench struct {
 		launchCancel context.CancelFunc
@@ -162,6 +164,8 @@ const (
 	evManagementLoaded
 	evBenchOperationDone
 	evGitContextLoaded
+	evDetailLoaded
+	evTeamAreasLoaded
 )
 
 type event struct {
@@ -174,6 +178,8 @@ type event struct {
 	gitContext gitContext
 	syncResult *benchSyncResult
 	management *benchManagement
+	detail     *DetailDocument
+	teamAreas  *TeamAreaCandidates
 
 	size size
 
@@ -280,6 +286,10 @@ func (rt *runtime) run(requests <-chan Request) error {
 				rt.handleBrowserLoaded(ev)
 			case evGitContextLoaded:
 				rt.handleGitContextLoaded(ev)
+			case evDetailLoaded:
+				rt.handleDetailLoaded(ev)
+			case evTeamAreasLoaded:
+				rt.handleTeamAreasLoaded(ev)
 			case evPinDone:
 				rt.handlePinDone(ev)
 			case evManagementLoaded:
@@ -291,7 +301,7 @@ func (rt *runtime) run(requests <-chan Request) error {
 			case evBenchTick:
 				if !rt.closing && !rt.reconnectRequired {
 					rt.beginGitContextRefresh()
-					if rt.mode == "review" {
+					if rt.mode == "review" || rt.detail.active {
 						rt.checkAdmission(nil, false)
 					} else if rt.cfg.Standalone {
 						rt.admissionActions = append(rt.admissionActions, ev)
@@ -459,6 +469,7 @@ func (rt *runtime) handleRequest(req Request) {
 func (rt *runtime) handleAdmittedRequest(req Request) {
 	if req.Command == "view" || req.Command == "review" || req.Command == "exit-review" {
 		rt.leaveConfiguration()
+		rt.cancelDetail()
 	}
 	switch req.Command {
 	case "ping", "status":
@@ -516,6 +527,9 @@ func (rt *runtime) handleKey(key uv.KeyPressEvent) {
 		}
 		return
 	}
+	if rt.handleDetailKey(key) || rt.handleTeamAreasKey(key) {
+		return
+	}
 	if rt.mode == "bench" && rt.form != nil {
 		rt.handleFormKey(key)
 		return
@@ -545,7 +559,7 @@ func (rt *runtime) handleAdmittedKey(key uv.KeyPressEvent) {
 
 	// Admission may complete after a local editor opens. Queued viewer keys
 	// cannot become editor commands or apply anything in the new state.
-	if rt.configuration != nil || rt.form != nil {
+	if rt.configuration != nil || rt.form != nil || rt.detail.active || rt.teamAreas.open {
 		return
 	}
 	if key.MatchString("s") {
@@ -708,6 +722,16 @@ func (rt *runtime) handleAdmittedResize(next size) {
 		rt.draw()
 		return
 	}
+	if rt.detail.active {
+		rt.resizeDetail()
+		rt.draw()
+		return
+	}
+	if rt.teamAreas.open {
+		rt.revealTeamAreaSelection()
+		rt.draw()
+		return
+	}
 	if rt.mode == "review" {
 		next = size{cols: rt.contentCols(), rows: rt.contentRows()}
 		if rt.review.session == nil {
@@ -747,6 +771,10 @@ func (rt *runtime) reviewResize(next size) {
 }
 
 func (rt *runtime) beginBenchRefresh(reply chan Result, force bool) {
+	if rt.detail.active && !force {
+		rt.reply(reply, Result{Snapshot: rt.snapshot()})
+		return
+	}
 	if rt.reconnectRequired {
 		rt.reply(reply, Result{Snapshot: rt.snapshot(), Err: errors.New(rt.reconnectReason)})
 		return
@@ -868,6 +896,7 @@ func (rt *runtime) beginReview(file, digest string, reply chan Result, replacing
 	}
 
 	rt.leaveConfiguration()
+	rt.cancelDetail()
 	rt.bench.launchGen++
 	rt.cancelBenchLaunch(errors.New("review opened"))
 	rt.cancelReviewLaunch(errors.New("review reopened"))
@@ -1510,6 +1539,8 @@ func (rt *runtime) shutdown() {
 	rt.onceShutdown(func() {
 		rt.closing = true
 		rt.cancelGitContext()
+		rt.cancelDetail()
+		rt.cancelTeamAreas()
 		rt.cancelPins()
 		if rt.admissionCancel != nil {
 			rt.admissionCancel()
