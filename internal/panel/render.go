@@ -112,7 +112,9 @@ func (rt *runtime) draw() {
 	}
 	if rows >= 4 {
 		fmt.Fprintf(&out, "\x1b[%d;1H\x1b[2K", rows-1)
-		if rt.notice != "" {
+		if rt.detail.active && (rt.detail.loading || rt.detail.err != nil) {
+			drawBar(&out, rt.detailActionLabel(), cols, "\x1b[48;2;27;37;52m\x1b[38;2;255;190;105m")
+		} else if rt.notice != "" {
 			drawBar(&out, safe(rt.notice), cols, "\x1b[48;2;27;37;52m\x1b[38;2;255;190;105m")
 		} else {
 			drawDivider(&out, cols, dividerStyle)
@@ -195,7 +197,7 @@ func (rt *runtime) addFooterHits(cols, y int, truncated bool) {
 	var buttons []button
 	switch {
 	case rt.detail.active:
-		buttons = []button{{"[S Sync item]", "detail-sync"}, {"[R Refresh cache]", "detail-refresh"}, {"[Esc Back]", "detail-close"}}
+		buttons = []button{{"[S Sync item]", "detail-sync"}, {"[R Refresh cache]", "detail-refresh"}, {"[Enter/Esc Collapse]", "detail-close"}}
 	case rt.teamAreas.open:
 		buttons = []button{{"[Enter Review]", "team-area-confirm"}, {"[r Retry]", "team-area-retry"}, {"[Esc Back]", "team-area-cancel"}}
 	case rt.form != nil:
@@ -331,7 +333,7 @@ func (rt *runtime) footerText(truncated bool) string {
 		if rt.detailActionBusy() {
 			buttons = "\x1b[2m" + buttons + "\x1b[22m"
 		}
-		return buttons + " [Esc Back] · ↑/↓/j/k scroll · PgUp/PgDn/Home/End · " + rt.detailActionLabel() + " · " + rt.detailPosition()
+		return buttons + " [Enter/Esc Collapse] · ↑/↓/j/k scroll · PgUp/PgDn/Home/End · " + rt.detailActionLabel() + " · " + rt.detailPosition()
 	}
 	if rt.teamAreas.open && !rt.reconnectRequired {
 		return "[Enter Review] [r Retry] [Esc Back] · team areas · ↑/↓/j/k select · PgUp/PgDn/Home/End · wheel scroll"
@@ -480,26 +482,34 @@ func (rt *runtime) drawBrowserRows(out *strings.Builder, cols, visible int) {
 			}
 			continue
 		}
-		line := b.lines[index]
-		if line.row < 0 {
-			out.WriteString("  " + ansi.Truncate(line.text, max(cols-2, 0), ""))
-			continue
-		}
-		selected := b.rows[line.row].node.Key == b.selected
-		marker := "  "
-		if selected {
-			out.WriteString("\x1b[1;38;2;154;218;250m")
-			marker = "› "
-		}
-		out.WriteString(ansi.Truncate(marker, cols, ""))
-		out.WriteString(ansi.Truncate(line.text, max(cols-2, 0), ""))
-		out.WriteString("\x1b[0m")
-		if line.disclosure >= 0 {
-			x := line.disclosure + 2
-			rt.hits = append(rt.hits, hitTarget{x1: x, x2: min(x+2, cols), y: y + contentStartRow, action: "fold", row: line.row})
-		}
-		rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + contentStartRow, action: "select", row: line.row})
+		rt.drawBrowserLine(out, cols, y, b.lines[index], true)
 	}
+}
+
+// drawBrowserLine shares Bench styling with the inline detail surface. Only the
+// ordinary browser grants row hits; expansion keeps selection and folds fixed.
+func (rt *runtime) drawBrowserLine(out *strings.Builder, cols, y int, line browserLine, interactive bool) {
+	if line.row < 0 {
+		out.WriteString("  " + ansi.Truncate(line.text, max(cols-2, 0), ""))
+		return
+	}
+	selected := rt.browser.rows[line.row].node.Key == rt.browser.selected
+	marker := "  "
+	if selected {
+		out.WriteString("\x1b[1;38;2;154;218;250m")
+		marker = "› "
+	}
+	out.WriteString(ansi.Truncate(marker, cols, ""))
+	out.WriteString(ansi.Truncate(line.text, max(cols-2, 0), ""))
+	out.WriteString("\x1b[0m")
+	if !interactive {
+		return
+	}
+	if line.disclosure >= 0 {
+		x := line.disclosure + 2
+		rt.hits = append(rt.hits, hitTarget{x1: x, x2: min(x+2, cols), y: y + contentStartRow, action: "fold", row: line.row})
+	}
+	rt.hits = append(rt.hits, hitTarget{x1: 0, x2: cols, y: y + contentStartRow, action: "select", row: line.row})
 }
 
 func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
@@ -507,7 +517,7 @@ func (rt *runtime) drawBrowserHelp(out *strings.Builder, cols, visible int) {
 		"Bench browser — local selection, not twig set",
 		"j/k or ↑/↓ select visible work items; PgUp/PgDn/Home/End navigate. ← collapses or selects parent; → expands or selects child; Space toggles.",
 		"Click a row to select, click its disclosure to fold. Mouse wheel scrolls the viewport independently of selection.",
-		"Enter opens full cached read-only detail for the selected work item or seed. Arrows/j/k/PgUp/PgDn/Home/End and the wheel scroll independently; Esc returns to the same Bench selection, folds and viewport. HTML headings, lists, code, links and tables render without the preview line cap.",
+		"Enter expands full cached read-only detail inline beneath the selected work item or seed. Bench rows and detail share one continuous scrolling surface: arrows/j/k/PgUp/PgDn/Home/End and the wheel scroll past the detail to following rows. Enter or Esc collapses it and restores the same Bench selection, folds and viewport. HTML headings, lists, code, links and tables render without the preview line cap.",
 		"p toggles the selected item's explicit Single pin; Shift+P toggles its explicit Subtree pin. Both can coexist. Each gesture changes only that kind; other pins, inherited membership, query rules and protected work remain. Inherited-only rows gain their own pin; ancestor pins are never removed. Seeds must be published first.",
 		"The footer shows Pin/Unpin for each kind from native cached explicit pins. Click those named controls for the same action as p/Shift+P. A busy pin action cannot be repeated; native origin, Bench and settings guards refuse stale captures. Membership refreshes from native truth afterward.",
 		"b opens Bench Configuration with Pins / Areas / Sprints / Benches. Tab or 1/2/3/4 chooses a section. Pins uses the same p/Shift+P toggles, including uncached IDs. Areas/Sprints use a add and d remove with review; p/P never pin those entries. Esc returns to the same viewer, selection, folds and viewport.",

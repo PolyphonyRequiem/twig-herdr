@@ -38,9 +38,10 @@ const (
 type detailState struct {
 	active      bool
 	id          int
-	title       string
+	key         string
+	view        string
+	benchOffset int
 	benchID     string
-	bench       string
 	binding     HostBinding
 	gen         uint64
 	cancel      context.CancelFunc
@@ -120,8 +121,14 @@ func (rt *runtime) openDetail() {
 	rt.cancelBenchLaunch(errors.New("Detail superseded Bench refresh"))
 	rt.cancelDetail()
 	rt.detail.active = true
-	rt.detail.id, rt.detail.title = node.ID, node.Title
-	rt.detail.benchID, rt.detail.bench = snapshot.BenchID, snapshot.BenchName
+	rt.detail.id = node.ID
+	rt.detail.key, rt.detail.view = node.Key, rt.benchView
+	rt.detail.benchOffset = rt.offsets[rt.benchView]
+	rt.detail.offset = rt.detail.benchOffset
+	if after, _ := rt.detailAnchor(rt.contentCols()); rt.detail.offset >= after {
+		rt.detail.offset += rt.detailLineCount()
+	}
+	rt.detail.benchID = snapshot.BenchID
 	rt.detail.binding = rt.binding
 	rt.requestDetail()
 	rt.draw()
@@ -160,7 +167,7 @@ func (rt *runtime) requestDetailAction(action detailAction) {
 		return
 	}
 	detail.gen++
-	gen, binding, benchID, id, cols := detail.gen, detail.binding, detail.benchID, detail.id, max(rt.contentCols(), 1)
+	gen, binding, benchID, id, cols := detail.gen, detail.binding, detail.benchID, detail.id, rt.detailWidth(rt.contentCols())
 	ctx, cancel := context.WithTimeout(rt.ctx, 30*time.Second)
 	detail.cancel, detail.loading, detail.err = cancel, true, nil
 	detail.action, detail.requestCols = action, cols
@@ -212,6 +219,9 @@ func (rt *runtime) cancelDetail() {
 }
 
 func (rt *runtime) closeDetail() {
+	if rt.detail.active {
+		rt.offsets[rt.detail.view] = rt.detail.benchOffset
+	}
 	rt.cancelDetail()
 	rt.draw()
 }
@@ -246,7 +256,6 @@ func (rt *runtime) handleDetailLoaded(ev event) {
 		return
 	}
 	detail.document = ev.detail
-	detail.title = ev.detail.Title
 	detail.cols = 0
 	rt.layoutDetail(rt.contentCols())
 	rt.draw()
@@ -254,12 +263,16 @@ func (rt *runtime) handleDetailLoaded(ev event) {
 
 func (rt *runtime) layoutDetail(cols int) {
 	detail := &rt.detail
-	cols = max(cols, 1)
-	if detail.cols == cols || detail.document == nil {
-		return
+	after, _ := rt.detailAnchor(cols)
+	cols = rt.detailWidth(cols)
+	oldCount := rt.detailLineCount()
+	if detail.cols != cols && detail.document != nil {
+		detail.lines = wrappedLabels(strings.TrimRight(detail.document.ANSI, "\n"), cols)
+		detail.cols = cols
 	}
-	detail.lines = wrappedLabels(strings.TrimRight(detail.document.ANSI, "\n"), cols)
-	detail.cols = cols
+	if after >= 0 && detail.offset >= after+oldCount {
+		detail.offset += rt.detailLineCount() - oldCount
+	}
 	detail.offset = max(0, min(detail.offset, rt.detailMaxOffset()))
 }
 
@@ -270,20 +283,48 @@ func (rt *runtime) resizeDetail() {
 	if !rt.detail.active {
 		return
 	}
-	cols := max(rt.contentCols(), 1)
-	rt.layoutDetail(cols)
+	cols := rt.detailWidth(rt.contentCols())
+	rt.layoutDetail(rt.contentCols())
 	rt.detail.offset = max(0, min(rt.detail.offset, rt.detailMaxOffset()))
 	if rt.detail.requestCols != cols {
 		rt.requestDetailAction(detailReflow)
 	}
 }
 
+// detailAnchor identifies the captured occurrence, not a subsequently changed
+// selection. Its end includes every wrapped physical line of the Bench row.
+func (rt *runtime) detailAnchor(cols int) (after, indent int) {
+	rt.browser.ensureLayout(rt.benchView, cols)
+	for _, row := range rt.browser.rows {
+		if row.node.Key != rt.detail.key {
+			continue
+		}
+		indent = 4
+		if rt.benchView == "tree" {
+			indent += min(row.depth*2, max(cols/3, 0))
+		} else if cols >= 40 {
+			indent = 2
+		}
+		return row.end, min(indent, max(cols-1, 0))
+	}
+	return -1, 0
+}
+
+func (rt *runtime) detailWidth(cols int) int {
+	_, indent := rt.detailAnchor(cols)
+	return max(cols-indent, 1)
+}
+
 func (rt *runtime) detailBodyRows() int {
-	return max(rt.contentVisibleRows()-2, 1)
+	return max(rt.contentVisibleRows(), 1)
+}
+
+func (rt *runtime) detailLineCount() int {
+	return max(len(rt.detail.lines), 1)
 }
 
 func (rt *runtime) detailMaxOffset() int {
-	return max(len(rt.detail.lines)-rt.detailBodyRows(), 0)
+	return max(len(rt.browser.lines)+rt.detailLineCount()-rt.detailBodyRows(), 0)
 }
 
 func (rt *runtime) scrollDetail(delta int) {
@@ -300,7 +341,7 @@ func (rt *runtime) handleDetailKey(key uv.KeyPressEvent) bool {
 		return false
 	}
 	switch {
-	case key.MatchString("esc"):
+	case key.MatchString("enter", "esc"):
 		rt.closeDetail()
 	case key.MatchString("s", "S", "shift+s"):
 		rt.handleDetailSync()
@@ -319,7 +360,7 @@ func (rt *runtime) handleDetailKey(key uv.KeyPressEvent) bool {
 	case key.MatchString("end"):
 		rt.scrollDetail(rt.detailMaxOffset())
 	}
-	// Other keys cannot mutate or navigate the Bench beneath the detail overlay.
+	// Selection and folds stay fixed while keys scroll the composed surface.
 	return true
 }
 
@@ -337,18 +378,22 @@ func (rt *runtime) handleDetailMouse(mouse uv.Mouse) bool {
 }
 
 func (rt *runtime) reconcileDetail() {
-	if rt.detail.active && (rt.browser.snapshot == nil || rt.browser.snapshot.BenchID != rt.detail.benchID || !sameManagementOrigin(rt.detail.binding, rt.binding)) {
+	if !rt.detail.active {
+		return
+	}
+	if rt.browser.snapshot == nil || rt.browser.snapshot.BenchID != rt.detail.benchID || rt.benchView != rt.detail.view || !sameManagementOrigin(rt.detail.binding, rt.binding) {
+		rt.cancelDetail()
+		return
+	}
+	if after, _ := rt.detailAnchor(rt.contentCols()); after < 0 {
 		rt.cancelDetail()
 	}
 }
 
 func (rt *runtime) detailPosition() string {
-	detail := &rt.detail
-	if detail.document == nil {
-		return "Read-only cached detail"
-	}
-	end := min(detail.offset+rt.detailBodyRows(), len(detail.lines))
-	return fmt.Sprintf("Read-only · lines %d–%d / %d", min(detail.offset+1, end), end, len(detail.lines))
+	total := len(rt.browser.lines) + rt.detailLineCount()
+	end := min(rt.detail.offset+rt.detailBodyRows(), total)
+	return fmt.Sprintf("Read-only Bench · lines %d–%d / %d", min(rt.detail.offset+1, end), end, total)
 }
 
 func (rt *runtime) detailActionLabel() string {
@@ -372,25 +417,34 @@ func (rt *runtime) detailActionLabel() string {
 }
 
 func (rt *runtime) drawDetail(out *strings.Builder, cols, rows int) {
+	rt.reconcileDetail()
+	if !rt.detail.active {
+		rt.drawBrowserRows(out, cols, rows)
+		return
+	}
 	rt.layoutDetail(cols)
+	after, indent := rt.detailAnchor(cols)
 	detail := &rt.detail
-	for row := range rows {
-		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", row+contentStartRow+1)
-		switch row {
-		case 0:
-			drawBar(out, fmt.Sprintf("#%d %s", detail.id, safe(detail.title)), cols, "\x1b[1m\x1b[38;2;110;205;245m")
-		case 1:
-			context := rt.detailActionLabel() + " · " + rt.detailPosition() + " · " + safe(detail.bench)
-			drawBar(out, context, cols, "\x1b[2m")
-		default:
-			index := detail.offset + row - 2
-			if detail.document != nil && index < len(detail.lines) {
-				out.WriteString(detail.lines[index])
-				out.WriteString("\x1b[0m")
-			} else if row == 2 {
-				message := rt.detailActionLabel()
-				out.WriteString(ansi.Truncate(message, cols, "…"))
+	prefix := strings.Repeat(" ", indent)
+	count := rt.detailLineCount()
+	for y := range rows {
+		fmt.Fprintf(out, "\x1b[%d;1H\x1b[2K", y+contentStartRow+1)
+		index := detail.offset + y
+		if index >= after && index < after+count {
+			out.WriteString(prefix)
+			if detail.document != nil && index-after < len(detail.lines) {
+				out.WriteString(detail.lines[index-after])
+			} else {
+				out.WriteString(ansi.Truncate(rt.detailActionLabel(), max(cols-indent, 1), "…"))
 			}
+			out.WriteString("\x1b[0m")
+			continue
+		}
+		if index >= after+count {
+			index -= count
+		}
+		if index < len(rt.browser.lines) {
+			rt.drawBrowserLine(out, cols, y, rt.browser.lines[index], false)
 		}
 	}
 }

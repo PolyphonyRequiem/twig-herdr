@@ -37,9 +37,9 @@ Keys:
   1 workspace table, 2 bench tree, 3 proposal review
   j/k or up/down select work items locally (not twig set), PgUp/PgDn/Home/End navigate
   left/right collapse/expand, Space toggle; click rows/disclosures; wheel scrolls
-  Enter opens full cached detail using Twig's Show renderer; no pre-sync
-  In detail: S pulls only this item and links; R reloads cache; Esc restores the Bench
-  Arrows/j/k/PgUp/PgDn/Home/End/wheel scroll; HTML headings/lists/code/tables render safely
+  Enter expands cached Show detail inline below its row, in an open-right frame
+  Arrows/j/k/PgUp/PgDn/Home/End/wheel scroll Bench and detail together; no pre-sync
+  S pulls only this item and links; R reloads cache; Enter/Esc collapse to the Bench
   b Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer
   up/down sections; Enter/right items; left sections; Tab or 1/2/3/4 sections
   Areas/Sprints use a add, d remove; Enter reviews/confirms

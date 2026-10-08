@@ -17,11 +17,13 @@ import (
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+	vt "github.com/charmbracelet/x/vt"
 )
 
 func detailFixture(t *testing.T) (*runtime, *DetailDocument) {
 	t.Helper()
 	rt, snapshot := browserFixture(t)
+	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
 	var body strings.Builder
 	for i := 1; i <= 120; i++ {
 		body.WriteString("\x1b[1;36mparagraph-" + strconv.Itoa(i) + "\x1b[0m\n")
@@ -29,8 +31,8 @@ func detailFixture(t *testing.T) (*runtime, *DetailDocument) {
 	document := &DetailDocument{Version: 1, BenchID: snapshot.BenchID, BenchName: snapshot.BenchName,
 		BindingID: rt.binding.BindingID, IdentityID: rt.binding.IdentityID, WorkItemID: 1,
 		Title: "Long parent", ANSI: body.String()}
-	rt.detail = detailState{active: true, id: 1, title: document.Title, benchID: snapshot.BenchID,
-		bench: snapshot.BenchName, binding: rt.binding, gen: 4, document: document}
+	rt.detail = detailState{active: true, id: 1, key: "root/1", view: rt.benchView, benchID: snapshot.BenchID,
+		binding: rt.binding, gen: 4, document: document}
 	rt.layoutDetail(rt.contentCols())
 	return rt, document
 }
@@ -65,36 +67,141 @@ func TestDetailReadRejectsRetargetingOriginAndExecutableTerminalControls(t *test
 	}
 }
 
-func TestDetailScrollAndEscapeDoNotChangeBenchSelectionFoldsOrViewport(t *testing.T) {
-	rt, _ := detailFixture(t)
-	rt.size.rows = panelChromeRows + 3
-	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
-	rt.browser.selectIndex(2)
-	rt.browser.collapsed["root/1"] = true
+func TestDetailScrollAndCollapseDoNotChangeBenchSelectionFoldsOrViewport(t *testing.T) {
+	for _, closeKey := range []rune{uv.KeyEscape, uv.KeyEnter} {
+		rt, _ := detailFixture(t)
+		rt.size.rows = panelChromeRows + 3
+		rt.browser.selectIndex(2)
+		rt.browser.collapsed["root/1"] = true
+		rt.browser.dirty = true
+		rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+		rt.offsets["tree"], rt.offsets["table"] = 1, 7
+		rt.detail.benchOffset, rt.detail.offset = 1, 1
+		selected, selectedID := rt.browser.selected, rt.browser.selectedID
+		folds := make(map[string]bool)
+		for key, value := range rt.browser.collapsed {
+			folds[key] = value
+		}
+		var before strings.Builder
+		rt.drawBrowserRows(&before, rt.contentCols(), rt.contentVisibleRows())
+		captureStdout(t, func() {
+			rt.handleDetailKey(uv.KeyPressEvent{Code: 'j', Text: "j"})
+			rt.handleDetailMouse(uv.Mouse{Button: uv.MouseWheelDown})
+		})
+		if rt.detail.offset != 5 {
+			t.Fatal("keys and wheel did not scroll the composed surface from its Bench position")
+		}
+		captureStdout(t, func() { rt.handleDetailKey(uv.KeyPressEvent{Code: uv.KeyEnd}) })
+		rows := detailScreen(t, rt)
+		if !strings.Contains(strings.Join(rows[contentStartRow:len(rows)-2], "\n"), "Unpublished") {
+			t.Fatal("End did not scroll beyond the detail to the following Bench rows")
+		}
+		captureStdout(t, func() { rt.handleDetailMouse(uv.Mouse{Button: uv.MouseWheelUp}) })
+		rows = detailScreen(t, rt)
+		if !strings.Contains(strings.Join(rows[contentStartRow:len(rows)-2], "\n"), "paragraph-120") {
+			t.Fatal("scrolling back from neighboring rows did not expose the uncapped final detail line")
+		}
+		captureStdout(t, func() { rt.handleDetailKey(uv.KeyPressEvent{Code: closeKey}) })
+		if rt.detail.active || rt.detail.document != nil || rt.browser.selected != selected || rt.browser.selectedID != selectedID || !reflect.DeepEqual(rt.browser.collapsed, folds) || rt.offsets["tree"] != 1 || rt.offsets["table"] != 7 {
+			t.Fatal("collapse changed Bench selection, folds or saved viewport, or retained closed detail data")
+		}
+		var after strings.Builder
+		rt.drawBrowserRows(&after, rt.contentCols(), rt.contentVisibleRows())
+		if after.String() != before.String() {
+			t.Fatal("collapse did not restore the same rendered Bench viewport")
+		}
+	}
+}
+
+func detailScreen(t *testing.T, rt *runtime) []string {
+	t.Helper()
+	pane := vt.NewEmulator(rt.contentCols(), rt.size.rows)
+	_, _ = pane.WriteString(captureStdout(t, rt.draw))
+	return strings.Split(pane.String(), "\n")
+}
+
+func TestDetailFrameAndWrappedBenchRowsFormOneContinuousSurface(t *testing.T) {
+	rt, document := detailFixture(t)
+	rt.size.rows = panelChromeRows + 10
+	rt.browser.snapshot.Roots = []*BrowserNode{
+		{Key: "ancestor", ID: 10, Label: "Ancestor", Children: []*BrowserNode{
+			{Key: "captured", ID: 1, Label: "Captured row with a wrapped continuation TAIL"},
+			{Key: "following", ID: 11, Label: "Following sibling"},
+		}},
+		{Key: "neighbor", ID: 12, Label: "Neighbor", Children: []*BrowserNode{{Key: "hidden", ID: 13, Label: "Hidden child"}}},
+		{Key: "duplicate", ID: 1, Label: "Other occurrence"},
+	}
+	rt.browser.collapsed["neighbor"] = true
 	rt.browser.dirty = true
 	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
-	rt.offsets["tree"], rt.offsets["table"] = 3, 7
-	selected, selectedID := rt.browser.selected, rt.browser.selectedID
-	folds := make(map[string]bool)
-	for key, value := range rt.browser.collapsed {
-		folds[key] = value
+	rt.browser.selectIndex(1)
+	rt.detail.key = "captured"
+	document.ANSI = "\x1b[36m┌──── Status ────\n│ Rich description\n└────────────────\x1b[0m\n"
+	rt.detail.cols = 0
+	rows := detailScreen(t, rt)
+	content := rows[contentStartRow : len(rows)-2]
+	if !strings.Contains(content[0], "Ancestor") || !strings.Contains(content[1], "Captured row") || !strings.Contains(content[2], "TAIL") {
+		t.Fatalf("ancestor or wrapped captured row disappeared before detail: %q", content)
 	}
-	captureStdout(t, func() {
-		rt.handleDetailKey(uv.KeyPressEvent{Code: 'j', Text: "j"})
-		rt.handleDetailMouse(uv.Mouse{Button: uv.MouseWheelDown})
-	})
-	if rt.detail.offset != 4 {
-		t.Fatal("detail keys and wheel did not scroll the independent detail viewport")
+	for i, text := range []string{"┌──── Status ────", "│ Rich description", "└────────────────"} {
+		if content[3+i] != strings.Repeat(" ", 6)+text {
+			t.Fatalf("native open-right frame lost its content-depth indentation or sequence: %q", content)
+		}
 	}
+	if !strings.Contains(content[6], "Following sibling") || !strings.Contains(content[7], "Neighbor") || !strings.Contains(content[8], "Other occurrence") || strings.Contains(strings.Join(content, "\n"), "Hidden child") {
+		t.Fatalf("following rows or existing fold changed around inline detail: %q", content)
+	}
+	rt.browser.selectIndex(4)
+	rows = detailScreen(t, rt)
+	if rows[contentStartRow+3] != strings.Repeat(" ", 6)+"┌──── Status ────" {
+		t.Fatal("detail followed hidden selection or another occurrence of the captured item")
+	}
+	rt.size.rows = panelChromeRows + 3
 	captureStdout(t, func() { rt.handleDetailKey(uv.KeyPressEvent{Code: uv.KeyEnd}) })
-	var out strings.Builder
-	rt.drawDetail(&out, rt.contentCols(), rt.contentVisibleRows())
-	if !strings.Contains(ansi.Strip(out.String()), "paragraph-120") {
-		t.Fatal("End did not expose the final uncapped detail line")
+	rows = detailScreen(t, rt)
+	if !strings.Contains(rows[contentStartRow], "Following sibling") || !strings.Contains(rows[contentStartRow+2], "Other occurrence") {
+		t.Fatalf("one surface could not scroll past the frame to following Bench rows: %q", rows)
 	}
-	captureStdout(t, func() { rt.handleDetailKey(uv.KeyPressEvent{Code: uv.KeyEscape}) })
-	if rt.detail.active || rt.detail.document != nil || rt.browser.selected != selected || rt.browser.selectedID != selectedID || !reflect.DeepEqual(rt.browser.collapsed, folds) || rt.offsets["tree"] != 3 || rt.offsets["table"] != 7 {
-		t.Fatal("Esc changed hidden Bench state or retained closed detail data")
+	rt.size.rows = panelChromeRows + 10
+	rows = detailScreen(t, rt)
+	if !strings.Contains(rows[contentStartRow], "Ancestor") || !strings.Contains(rows[contentStartRow+8], "Other occurrence") {
+		t.Fatal("a taller viewport left the composed surface at an invalid scroll offset")
+	}
+}
+
+func TestDetailLoadingAndRefreshPreserveFollowingBenchViewport(t *testing.T) {
+	rt, dir := detailNativeFixture(t, false)
+	rt.size.rows = panelChromeRows + 3
+	rt.browser.snapshot.Roots = []*BrowserNode{{Key: "captured", ID: 1, Label: "Captured"}}
+	for i := 2; i <= 40; i++ {
+		rt.browser.snapshot.Roots = append(rt.browser.snapshot.Roots, &BrowserNode{Key: fmt.Sprintf("following/%d", i), ID: i, Label: fmt.Sprintf("Following %d", i)})
+	}
+	rt.browser.dirty = true
+	rt.browser.ensureLayout(rt.benchView, rt.contentCols())
+	rt.browser.selectIndex(0)
+	rt.offsets[rt.benchView] = 20
+	before := detailScreen(t, rt)[contentStartRow]
+	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter}) })
+	if top := detailScreen(t, rt)[contentStartRow]; top != before {
+		t.Fatalf("loading placeholder moved following Bench anchor: before %q, after %q", before, top)
+	}
+	awaitDetailRead(t, rt)
+	if top := detailScreen(t, rt)[contentStartRow]; top != before {
+		t.Fatalf("loaded detail moved following Bench anchor: before %q, after %q", before, top)
+	}
+	changed := *rt.detail.document
+	changed.ANSI = strings.Repeat("A longer refreshed document line\n", 200)
+	data, err := json.Marshal(&changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cache.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'r', Text: "r"}) })
+	awaitDetailRead(t, rt)
+	if top := detailScreen(t, rt)[contentStartRow]; top != before {
+		t.Fatalf("refreshed detail moved following Bench anchor: before %q, after %q", before, top)
 	}
 }
 
@@ -103,7 +210,7 @@ func TestDetailLateResponseCannotReplaceReflowOrReviveClosedActor(t *testing.T) 
 	stale := *original
 	stale.Title = "stale-response"
 	captureStdout(t, func() { rt.handleDetailLoaded(event{token: 3, detail: &stale}) })
-	if rt.detail.document != original || rt.detail.title != original.Title {
+	if rt.detail.document != original {
 		t.Fatal("stale generation replaced the captured rich detail")
 	}
 	captureStdout(t, rt.closeDetail)
@@ -132,7 +239,7 @@ func TestDetailReflowPreservesWideGraphemesAndStylingWithoutLineCap(t *testing.T
 	rt, document := detailFixture(t)
 	document.ANSI = "\x1b[38;2;12;34;56mABC界DEF🙂GHIJKLMNOPQRSTUVWXYZ\x1b[0m\n" + strings.Repeat("tail\n", 11000)
 	rt.detail.cols = 0
-	rt.layoutDetail(4)
+	rt.layoutDetail(8)
 	var joined strings.Builder
 	for _, line := range rt.detail.lines {
 		if ansi.StringWidth(line) > 4 {
@@ -212,6 +319,20 @@ func runDetailNativeFixture(dir string) error {
 	sync := false
 	for _, arg := range os.Args[4:] {
 		sync = sync || arg == "--sync"
+	}
+	if expected, err := os.ReadFile(filepath.Join(dir, "expected-width")); err == nil {
+		width := ""
+		for i := 4; i+1 < len(os.Args); i++ {
+			if os.Args[i] == "--width" {
+				width = os.Args[i+1]
+				break
+			}
+		}
+		if width != string(expected) {
+			return fmt.Errorf("native detail width %s did not fit the inline content width %s", width, expected)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if sync {
 		journal, err := os.OpenFile(filepath.Join(dir, "pulls"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
@@ -352,10 +473,19 @@ func detailPullCount(t *testing.T, dir string) int {
 
 func TestDetailInputKeepsEntryRefreshAndResizeCachedUntilExplicitSync(t *testing.T) {
 	rt, dir := detailNativeFixture(t, false)
+	rt.size.rows = panelChromeRows + 3
+	rt.offsets["tree"] = 1
+	anchor := detailScreen(t, rt)[contentStartRow]
+	if err := os.WriteFile(filepath.Join(dir, "expected-width"), []byte("28"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter}) })
 	awaitDetailRead(t, rt)
 	if rt.detail.document == nil || rt.detail.document.Title != "Long parent" || detailPullCount(t, dir) != 0 {
 		t.Fatal("opening detail fetched remote content instead of presenting the cache")
+	}
+	if rows := detailScreen(t, rt); rows[contentStartRow] != anchor {
+		t.Fatal("expansion moved the existing Bench viewport anchor")
 	}
 	rt.detail.offset = 17
 	for _, key := range []uv.KeyPressEvent{{Code: 'r', Text: "r"}, {Code: 'R', Text: "R"}, {Code: 'r', Mod: uv.ModShift}} {
@@ -364,6 +494,9 @@ func TestDetailInputKeepsEntryRefreshAndResizeCachedUntilExplicitSync(t *testing
 		if rt.detail.document.Title != "Long parent" || rt.detail.offset != 17 || detailPullCount(t, dir) != 0 {
 			t.Fatal("R changed position or fetched remote content rather than rereading the cache")
 		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "expected-width"), []byte("41"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	captureStdout(t, func() { rt.handleResize(size{cols: 45, rows: rt.size.rows}) })
 	awaitDetailRead(t, rt)
@@ -377,6 +510,45 @@ func TestDetailInputKeepsEntryRefreshAndResizeCachedUntilExplicitSync(t *testing
 		awaitDetailRead(t, rt)
 		if rt.detail.document.WorkItemID != 1 || rt.detail.document.Title != "Remote item" || !strings.Contains(rt.detail.document.ANSI, "Pulled remote description") || rt.detail.offset != 17 || rt.browser.selectedID != 3 || detailPullCount(t, dir) != i+1 {
 			t.Fatal("S did not pull the captured item, or followed changed hidden selection")
+		}
+	}
+}
+
+func TestDetailNestedNativeWidthSubtractsIndentationAndClampsToOne(t *testing.T) {
+	rt, dir := detailNativeFixture(t, false)
+	output, err := os.ReadFile(filepath.Join(dir, "cache.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document DetailDocument
+	if err := json.Unmarshal(output, &document); err != nil {
+		t.Fatal(err)
+	}
+	document.WorkItemID, document.Title = 2, "Inherited child"
+	output, err = json.Marshal(&document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cache.json"), output, 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt.browser.selectIndex(1)
+	if err := os.WriteFile(filepath.Join(dir, "expected-width"), []byte("26"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: uv.KeyEnter}) })
+	awaitDetailRead(t, rt)
+	if rt.detail.err != nil || rt.detail.document == nil || rt.detail.document.WorkItemID != 2 {
+		t.Fatalf("nested cache-only detail did not fit beneath its captured row: %v", rt.detail.err)
+	}
+	for _, next := range []struct{ cols, width int }{{20, 14}, {1, 1}} {
+		if err := os.WriteFile(filepath.Join(dir, "expected-width"), []byte(strconv.Itoa(next.width)), 0600); err != nil {
+			t.Fatal(err)
+		}
+		captureStdout(t, func() { rt.handleResize(size{cols: next.cols, rows: rt.size.rows}) })
+		awaitDetailRead(t, rt)
+		if rt.detail.err != nil || rt.detail.document.WorkItemID != 2 || detailPullCount(t, dir) != 0 {
+			t.Fatalf("narrow inline reflow failed or fetched remote content: %v", rt.detail.err)
 		}
 	}
 }
@@ -418,9 +590,8 @@ func TestDetailBusySyncRefusesReplayAndFailureRetainsContentAndPosition(t *testi
 	if ev.err == nil || !strings.Contains(ev.err.Error(), "remote unavailable") || rt.detailActionBusy() || rt.detail.document != original || rt.detail.offset != 19 || !strings.Contains(rt.detailActionLabel(), "Item sync failed") || detailPullCount(t, dir) != 1 || rt.detail.gen != gen {
 		t.Fatal("failed sync cancelled/replayed the pull or discarded last successful content/position")
 	}
-	var out strings.Builder
-	rt.drawDetail(&out, 180, rt.contentVisibleRows())
-	if !strings.Contains(ansi.Strip(out.String()), "Item sync failed") || !strings.Contains(ansi.Strip(out.String()), "paragraph-20") {
+	rows := detailScreen(t, rt)
+	if !strings.Contains(rows[len(rows)-2], "Item sync failed") || !strings.Contains(strings.Join(rows[contentStartRow:len(rows)-2], "\n"), "paragraph-") {
 		t.Fatal("sync failure did not remain visible alongside the retained scrolled content")
 	}
 	captureStdout(t, func() { rt.handleKey(uv.KeyPressEvent{Code: 'r', Text: "r"}) })

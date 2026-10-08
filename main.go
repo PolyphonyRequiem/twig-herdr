@@ -42,9 +42,9 @@ worktree and Git branch. Herdr workspace/tab/pane handles sit at the lower-right
 Inside the panel: 1 Table, 2 Tree, 3 Review (latest unresolved proposal),
 j/k or up/down select local work items (not twig set), left/right collapse/expand,
 Space toggles, PgUp/PgDn/Home/End navigate. Click rows/disclosures; wheel scrolls.
-Enter opens full cached detail using Twig's Show renderer; no pre-sync. HTML field
-headings, lists, code and tables render safely. In detail, S pulls only that item and
-its links (never pending edits/related targets); R reloads cache; Esc restores selection.
+Enter expands full cached Show detail beneath the selected row in an open-right
+frame; no pre-sync. Tree and detail share one scrolling surface. Enter/Esc collapse
+and restore the Bench position. S pulls only this item/links; R reloads cache.
 b opens Bench Configuration (Pins / Areas / Sprints / Benches); Esc returns to the viewer.
 Up/down chooses sections; Enter/right focuses items; left returns to sections.
 Tab or 1/2/3/4 also chooses a section. Pins uses p/Shift+P independent toggles, including
